@@ -1,0 +1,1 @@
+This is the folder for all your temporary and generated files
