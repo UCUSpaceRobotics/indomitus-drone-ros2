@@ -1,23 +1,33 @@
+from picamera2 import Picamera2
 import cv2
 
 class Camera:
-    def __init__(self, camera_id=0, width=640, height=480):
-        self.cap = cv2.VideoCapture(camera_id)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    def __init__(self, width=640, height=480):
+        self.picam2 = Picamera2()
         
-        if not self.cap.isOpened():
-            raise RuntimeError("Couldn't open camera")
+        # Налаштовуємо конфігурацію: потік "main" з роздільною здатністю 640x480
+        config = self.picam2.create_video_configuration(
+            main={"size": (width, height), "format": "RGB888"}
+        )
+        self.picam2.configure(config)
+        self.picam2.start()
 
     def get_frame_bytes(self):
-        """Captures a frame, encodes it as JPEG, and returns the bytes."""
-        success, frame = self.cap.read()
-        if not success:
+        """Захоплює поточний кадр як масив та кодує в JPEG."""
+        try:
+            # Беремо готовий масив пікселів напряму з потоку "main"
+            frame = self.picam2.capture_array("main")
+            
+            # Picamera2 віддає RGB, а OpenCV працює з BGR
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            
+            # Кодуємо в байти JPEG
+            ret, encoded = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            return encoded.tobytes() if ret else None
+        except Exception as e:
+            # Тепер, якщо щось піде не так, ми одразу побачимо це в терміналі
+            print(f"❌ Помилка обробки кадру: {e}")
             return None
-        
-        # Encode the frame as .jpg with 80% quality
-        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        return buffer.tobytes() if ret else None
 
     def release(self):
-        self.cap.release()
+        self.picam2.stop()

@@ -20,3 +20,15 @@ Disable hotspot
 ```
 sudo nmcli connection down erso_drone
 ```
+
+
+Don't forget to install libraries
+
+```
+pip install fastapi uvicorn opencv-python-headless jinja2
+```
+
+starting command
+```
+python -m src.web_ui.server
+```
