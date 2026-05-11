@@ -10,7 +10,6 @@ This document provides instructions for configuring the network connectivity and
 Ensure the virtual environment is initialized and all required dependencies are installed. Execute the following commands within the project root directory:
 
 ```bash
-cd ~/drone_autonomy_project
 source .venv/bin/activate
 pip install fastapi uvicorn opencv-python-headless jinja2
 ```
@@ -81,7 +80,6 @@ ssh username@192.168.1.50
 Launch the application:
 
 ```bash
-cd ~/drone_autonomy_project
 source .venv/bin/activate
 python -m src.web_ui.server
 ```

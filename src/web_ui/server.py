@@ -7,37 +7,52 @@ import uvicorn
 
 from src.cv.camera import Camera
 
-camera = None
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global camera
     print("Camera initialization...")
-    camera = Camera()
-    yield
-    print("Camera release")
-    if camera:
-        camera.release()
+    app.state.shutdown_event = asyncio.Event()
+    app.state.camera = Camera()
+    try:
+        yield
+    finally:
+        app.state.shutdown_event.set()
+        print("Camera release")
+        camera = getattr(app.state, "camera", None)
+        if camera:
+            camera.release()
 
 app = FastAPI(title="Erso FPV - Ground Station", lifespan=lifespan)
 templates = Jinja2Templates(directory="src/web_ui/templates")
 
-async def frame_generator():
-    """Asynchronous generator that yields MJPEG frames without blocking the server."""
-    global camera
-    while True:
-        if camera:
-            # CRITICAL FIX:
-            # Run the heavy synchronous method capture_array in a separate
-        
-            frame_bytes = await asyncio.to_thread(camera.get_frame_bytes)
-            
-            if frame_bytes:
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-        
-        # Minimal sleep to yield control back to the event loop, allowing other requests to be processed
-        await asyncio.sleep(0.01)
+async def frame_generator(request: Request):
+    """Frame generator for the client."""
+    try:
+        while True:
+            shutdown_event = getattr(request.app.state, "shutdown_event", None)
+            if shutdown_event and shutdown_event.is_set():
+                print("Shutdown requested, stopping stream.")
+                break
+
+            if await request.is_disconnected():
+                print("Client disconnected, stopping stream.")
+                break
+
+            camera = getattr(request.app.state, "camera", None)
+            if camera:
+                frame_bytes = await asyncio.to_thread(camera.get_frame_bytes)
+                if frame_bytes:
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
+                    )
+            else:
+                await asyncio.sleep(0.1)
+
+            await asyncio.sleep(0.01)
+    except (asyncio.CancelledError, GeneratorExit):
+        print("Stream cancelled, stopping generator.")
+        raise
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
@@ -49,12 +64,10 @@ async def index(request: Request):
     )
 
 @app.get("/video_stream")
-async def video_stream():
-    """Endpoint for video streaming with cache protection."""
+async def video_stream(request: Request):
     return StreamingResponse(
-        frame_generator(), 
+        frame_generator(request), 
         media_type="multipart/x-mixed-replace; boundary=frame",
-        # Add headers to prevent caching of the video stream, ensuring clients always get the latest frames
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
