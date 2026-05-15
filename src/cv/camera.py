@@ -10,7 +10,7 @@ class Camera:
         self.picam2 = Picamera2()
 
         config = self.picam2.create_video_configuration(
-            main={"size": (width, height), "format": "BGR888"}
+            main={"size": (width, height), "format": "RGB888"}
         )
         self.picam2.configure(config)
         self.picam2.start()
@@ -19,11 +19,9 @@ class Camera:
         try:
             with self._lock:
                 frame_rgb = self.picam2.capture_array("main")
-
-            frame_bgr = frame_rgb[:, :, ::-1]
             ret, encoded = cv2.imencode(
                 ".jpg",
-                frame_bgr,
+                frame_rgb,
                 [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality],
             )
             return encoded.tobytes() if ret else None
