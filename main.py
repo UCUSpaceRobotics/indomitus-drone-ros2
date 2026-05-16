@@ -26,19 +26,19 @@ def main():
     time.sleep(5) # Даємо час на запуск процесу та отримання перших Heartbeat
 
     try:
-        # 2. Зміна режиму на GUIDED
-        print("\n>>> КРОК 1: Перехід у режим GUIDED...")
-        command_queue.put(create_command("set_mode", mode="GUIDED"))
+        # 2. Зміна режиму (змінюємо GUIDED на STABILIZE)
+        print("\n>>> КРОК 1: Перехід у режим STABILIZE...")
+        command_queue.put(create_command("set_mode", mode="STABILIZE"))
         time.sleep(2)
 
         # 3. Армінг (Запуск моторів)
         print("\n>>> КРОК 2: Запит на ARMING (Запуск моторів)...")
         command_queue.put(create_command("arm", state=True))
-        time.sleep(4) # Чекаємо, поки Піксхавк пройде перевірки і розкрутить мотори
-
-        # 4. Зліт (Тестовий)
-        print("\n>>> КРОК 3: Команда TAKEOFF (Зліт на 2 метри)...")
-        command_queue.put(create_command("takeoff", altitude=2.0))
+        time.sleep(4)
+        
+        # # 4. Зліт (Тестовий)
+        # print("\n>>> КРОК 3: Команда TAKEOFF (Зліт на 2 метри)...")
+        # command_queue.put(create_command("takeoff", altitude=2.0))
 
         # 5. Моніторинг телеметрії
         print("\n>>> КРОК 4: Моніторинг телеметрії (15 секунд)...")
