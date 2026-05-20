@@ -26,23 +26,25 @@ def main():
     time.sleep(6) # Трохи збільшений час для стабілізації потоків даних при старті
 
     try:
-        # 2. Зміна режиму на GUIDED
-        print("\n>>> КРОК 1: Перехід у режим GUIDED...")
-        command_queue.put(create_command("set_mode", mode="GUIDED"))
+        # 2. Перехід у LOITER для надійного армінгу
+        print("\n>>> КРОК 1: Перехід у режим LOITER...")
+        command_queue.put(create_command("set_mode", mode="LOITER"))
         time.sleep(3)
 
-        # 3. Армінг (Запуск моторів на холостому ходу)
+        # 3. Армінг (Запуск моторів)
         print("\n>>> КРОК 2: Запит на ARMING (Запуск моторів)...")
         command_queue.put(create_command("arm", state=True))
-        time.sleep(4) # Чекаємо розкрутки моторів та підтвердження від польотного контролера
+        time.sleep(4) 
+        
+        # 3.5. Перехід у GUIDED ВЖЕ ПІСЛЯ армінгу
+        print("\n>>> КРОК 2.5: Перехід у режим GUIDED...")
+        command_queue.put(create_command("set_mode", mode="GUIDED"))
+        time.sleep(2)
 
-        # 4. Автономний зліт
-        # Оскільки ми зняли пропелери, дрон просто збільшить оберти моторів,
-        # симулюючи зліт на вказану висоту.
-        TARGET_ALTITUDE = 2.0  # Цільова висота у метрах
+        # 4. Зліт (Тестовий)
+        TARGET_ALTITUDE = 2.0
         print(f"\n>>> КРОК 3: Команда TAKEOFF (Зліт на {TARGET_ALTITUDE} метри)...")
         command_queue.put(create_command("takeoff", altitude=TARGET_ALTITUDE))
-        time.sleep(2)
 
         # 5. Моніторинг польоту / висіння у повітрі
         FLIGHT_DURATION = 12.0  # Час висіння у секундах

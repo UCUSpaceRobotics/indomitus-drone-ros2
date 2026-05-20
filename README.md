@@ -98,3 +98,10 @@ NetworkManager persists configured connection profiles. Use the commands below t
   ```bash
   sudo nmcli connection down erso_drone
   ```
+
+
+### Launching test script
+
+```
+sudo .venv/bin/python main.py
+```

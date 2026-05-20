@@ -1,5 +1,13 @@
+"""Low-level MAVLink communication client for ArduPilot (Pixhawk)."""
+
+import os
 import time
+
+# Force MAVLink 2.0 protocol before importing pymavlink tools
+os.environ["MAVLINK20"] = "1"
+
 from pymavlink import mavutil
+
 
 class PixhawkClient:
     """
@@ -8,9 +16,7 @@ class PixhawkClient:
     """
 
     def __init__(self, connection_string="/dev/ttyAMA0", baudrate=921600):
-        """
-        Initializes the serial connection to the Pixhawk.
-        """
+        """Initializes the serial connection to the Pixhawk."""
         print(f"[COMM] Initializing MAVLink connection on {connection_string} @ {baudrate}...")
         
         # We set source_system=255 and source_component=0 to identify this RPi as a GCS 
@@ -56,12 +62,10 @@ class PixhawkClient:
             return False
 
     def request_data_streams(self, rate_hz=10):
-        """
-        Requests the Pixhawk to stream specific data packets at a given frequency.
-        """
+        """Requests the Pixhawk to stream specific data packets at a given frequency."""
         print(f"[COMM] Requesting telemetry streams at {rate_hz} Hz...")
         
-        # Dictionary of Message IDs to request
+        # Message IDs to request
         # 32: LOCAL_POSITION_NED, 30: ATTITUDE, 1: SYS_STATUS (Battery/Errors)
         messages_to_request = [
             mavutil.mavlink.MAVLINK_MSG_ID_LOCAL_POSITION_NED,
@@ -93,11 +97,10 @@ class PixhawkClient:
 
     def get_telemetry_tick(self):
         """
-        Non-blocking read of the MAVLink buffer. Parses incoming messages 
-        and updates the internal telemetry dictionary.
+        Non-blocking read of the MAVLink buffer. Parses ALL incoming messages,
+        updates telemetry, and prints Pixhawk text messages (STATUSTEXT).
         Returns the updated dictionary.
         """
-        # Read all available messages in the buffer (non-blocking loop)
         while True:
             msg = self.connection.recv_match(blocking=False)
             if msg is None:
@@ -107,7 +110,7 @@ class PixhawkClient:
 
             if msg_type == "HEARTBEAT":
                 self.telemetry["last_heartbeat_time"] = time.time()
-                self.telemetry["armed"] = msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
+                self.telemetry["armed"] = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
                 self.telemetry["mode"] = mavutil.mode_string_v10(msg)
                 
             elif msg_type == "LOCAL_POSITION_NED":
@@ -124,6 +127,11 @@ class PixhawkClient:
                 self.telemetry["battery_voltage_v"] = msg.voltage_battery / 1000.0
                 self.telemetry["battery_remaining_pct"] = msg.battery_remaining
 
+            elif msg_type == "STATUSTEXT":
+                # Intercept text messages from Pixhawk (Pre-Arm errors, EKF warnings, etc.)
+                text = msg.text.decode('utf-8') if isinstance(msg.text, bytes) else msg.text
+                print(f"\n⚠️ [PIXHAWK MSG]: {text}")
+
         return self.telemetry
 
     # -------------------------------------------------------------------------
@@ -131,9 +139,7 @@ class PixhawkClient:
     # -------------------------------------------------------------------------
 
     def set_mode(self, mode_name="GUIDED"):
-        """
-        Changes the flight mode (e.g., 'GUIDED', 'RTL', 'LAND').
-        """
+        """Changes the flight mode (e.g., 'GUIDED', 'RTL', 'LAND')."""
         if mode_name not in self.connection.mode_mapping():
             print(f"[COMM] ERROR: Unknown flight mode '{mode_name}'")
             return False
@@ -151,11 +157,7 @@ class PixhawkClient:
     def arm(self, state=True, timeout=3.0):
         """
         Arms or disarms the motors and waits for confirmation from the Pixhawk.
-        Captures and prints any Pre-Arm failure messages (STATUSTEXT).
-        
-        Parameters:
-        state (bool): True to ARM, False to DISARM.
-        timeout (float): Maximum time in seconds to wait for acknowledgment.
+        Uses a separate fast read loop to catch COMMAND_ACK while maintaining STATUSTEXT logging.
         
         Returns:
         bool: True if the command was accepted, False if rejected or timed out.
@@ -174,36 +176,32 @@ class PixhawkClient:
             0, 0, 0, 0, 0, 0 # Params 2-7 (unused)
         )
 
-        # 2. Wait for acknowledgment and catch status texts
+        # 2. Direct monitoring loop for ACK
         start_time = time.time()
         while (time.time() - start_time) < timeout:
-            # Read the next message in the buffer without blocking
             msg = self.connection.recv_match(blocking=False)
             
             if msg is None:
-                time.sleep(0.01) # Tiny pause to prevent 100% CPU usage
+                time.sleep(0.01)
                 continue
 
             msg_type = msg.get_type()
 
-            # Catch Pixhawk text messages (e.g., Pre-Arm errors)
+            # Ensure we still print status texts if they arrive inside this loop
             if msg_type == "STATUSTEXT":
                 text = msg.text.decode('utf-8') if isinstance(msg.text, bytes) else msg.text
-                print(f"[PIXHAWK MSG]: {text}")
+                print(f"\n⚠️ [PIXHAWK MSG inside ARM]: {text}")
 
-            # Catch the Command Acknowledgment
             elif msg_type == "COMMAND_ACK":
-                # Check if this ACK is specifically for our ARM_DISARM command
                 if msg.command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM:
                     if msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
                         print(f"[COMM] SUCCESS: Drone is now {action}ED.")
-                        self.telemetry["armed"] = state # Update internal state
+                        self.telemetry["armed"] = state
                         return True
                     else:
                         print(f"[COMM] ERROR: {action} command rejected! (MAV_RESULT code: {msg.result})")
                         return False
 
-        # 3. Timeout handling
         print(f"[COMM] TIMEOUT: No acknowledgment received for {action} command after {timeout}s.")
         return False
 
@@ -231,9 +229,6 @@ class PixhawkClient:
         dy_m: Move Right (positive) or Left (negative) in meters.
         dz_m: Move DOWN (positive) or UP (negative) in meters.
         """
-        # Type mask: 0b0000_11_01_1111_1000 (0x0DF8)
-        # We set bits to 1 to IGNORE them. We ignore Velocity, Acceleration, and Yaw.
-        # We set bits to 0 to USE them. We use Position (x, y, z).
         type_mask = int(0b0000110111111000)
 
         self.connection.mav.set_position_target_local_ned_send(
@@ -243,27 +238,22 @@ class PixhawkClient:
             mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED, # Relative to current drone body
             type_mask,
             dx_m, dy_m, dz_m, # Position
-            0, 0, 0,          # Velocity (Ignored by mask)
-            0, 0, 0,          # Acceleration (Ignored by mask)
-            0, 0              # Yaw, Yaw rate (Ignored by mask)
+            0, 0, 0,          # Velocity (Ignored)
+            0, 0, 0,          # Acceleration (Ignored)
+            0, 0              # Yaw, Yaw rate (Ignored)
         )
         print(f"[COMM] Command sent: MOVE Local [dx:{dx_m}, dy:{dy_m}, dz:{dz_m}]")
     
     def send_velocity_target_body_ned(self, vx_m_s, vy_m_s, vz_m_s):
         """
         Commands the drone to move at a specific velocity relative to its own body.
-        Perfect for visual servoing (tracking markers/objects).
         
         Parameters:
         vx_m_s: Forward (+) / Backward (-) speed in m/s.
         vy_m_s: Right (+) / Left (-) speed in m/s.
         vz_m_s: Down (+) / Up (-) speed in m/s.
         """
-        # Type mask: 0b0000_11_01_1100_0111 (0x0DC7)
-        # 1 means IGNORE, 0 means USE.
-        # We ignore Position (bits 0,1,2), Acceleration (bits 6,7,8), and Yaw (bits 10,11).
-        # We USE Velocity (bits 3,4,5).
-        type_mask = int(0b0000110111000111)
+        type_mask = int(0b000011011000111)
 
         self.connection.mav.set_position_target_local_ned_send(
             0, # time_boot_ms (not used)
