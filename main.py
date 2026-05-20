@@ -1,4 +1,4 @@
-"""Main for drone autonomy."""
+"""Main for drone autonomy - Outdoor GPS Test."""
 
 import time
 import multiprocessing
@@ -8,7 +8,7 @@ import sys
 from src.comm.mavlink_node import comm_process_loop, create_command
 
 def main():
-    print("🚀 [MAIN] Ініціалізація наземної станції...")
+    print("🚀 [MAIN] Ініціалізація автономної системи (Тест на вулиці з GPS)...")
     
     # Створюємо черги для спілкування між процесами
     telemetry_queue = multiprocessing.Queue()
@@ -22,40 +22,45 @@ def main():
     )
     comm_process.start()
 
-    print("⏳ [MAIN] Очікування підключення до Pixhawk (до 10 секунд)...")
-    time.sleep(5) # Даємо час на запуск процесу та отримання перших Heartbeat
+    print("⏳ [MAIN] Очікування підключення до Pixhawk та ініціалізації EKF...")
+    time.sleep(6) # Трохи збільшений час для стабілізації потоків даних при старті
 
     try:
-        # 2. Зміна режиму (змінюємо GUIDED на STABILIZE)
-        print("\n>>> КРОК 1: Перехід у режим STABILIZE...")
-        command_queue.put(create_command("set_mode", mode="STABILIZE"))
-        time.sleep(2)
+        # 2. Зміна режиму на GUIDED
+        print("\n>>> КРОК 1: Перехід у режим GUIDED...")
+        command_queue.put(create_command("set_mode", mode="GUIDED"))
+        time.sleep(3)
 
-        # 3. Армінг (Запуск моторів)
+        # 3. Армінг (Запуск моторів на холостому ходу)
         print("\n>>> КРОК 2: Запит на ARMING (Запуск моторів)...")
         command_queue.put(create_command("arm", state=True))
-        time.sleep(4)
-        
-        # # 4. Зліт (Тестовий)
-        # print("\n>>> КРОК 3: Команда TAKEOFF (Зліт на 2 метри)...")
-        # command_queue.put(create_command("takeoff", altitude=2.0))
+        time.sleep(4) # Чекаємо розкрутки моторів та підтвердження від польотного контролера
 
-        # 5. Моніторинг телеметрії
-        print("\n>>> КРОК 4: Моніторинг телеметрії (15 секунд)...")
+        # 4. Автономний зліт
+        # Оскільки ми зняли пропелери, дрон просто збільшить оберти моторів,
+        # симулюючи зліт на вказану висоту.
+        TARGET_ALTITUDE = 2.0  # Цільова висота у метрах
+        print(f"\n>>> КРОК 3: Команда TAKEOFF (Зліт на {TARGET_ALTITUDE} метри)...")
+        command_queue.put(create_command("takeoff", altitude=TARGET_ALTITUDE))
+        time.sleep(2)
+
+        # 5. Моніторинг польоту / висіння у повітрі
+        FLIGHT_DURATION = 12.0  # Час висіння у секундах
+        print(f"\n>>> КРОК 4: Моніторинг телеметрії у польоті ({FLIGHT_DURATION} секунд)...")
         start_time = time.time()
         
-        while (time.time() - start_time) < 15.0:
+        while (time.time() - start_time) < FLIGHT_DURATION:
             try:
                 # Дістаємо найсвіжіший словник телеметрії
                 telem = telemetry_queue.get(timeout=0.1)
                 
-                # Z-координата в NED йде вниз, тому інвертуємо для зручності
+                # Z-координата в NED йде вниз від точки старту, інвертуємо для реальної висоти
                 alt_m = -telem.get('pos_z_m', 0.0)
                 mode = telem.get('mode', 'UNKNOWN')
                 armed = "ТАК" if telem.get('armed') else "НІ"
                 batt = telem.get('battery_voltage_v', 0.0)
                 
-                # Очищаємо рядок терміналу і друкуємо поверх нього (ефект панелі)
+                # Друк телеметрії в один рядок
                 sys.stdout.write(f"\r[ТЕЛЕМЕТРІЯ] Режим: {mode:^8} | Арм: {armed:^3} | Висота: {alt_m:>5.2f}м | Батарея: {batt:>5.1f}V ")
                 sys.stdout.flush()
                 
@@ -64,24 +69,23 @@ def main():
                 
             time.sleep(0.2) # Оновлення 5 разів на секунду
             
-        print() # Перенесення рядка після завершення моніторингу
+        print() # Перенесення рядка після завершення циклу
 
-        # 6. Посадка
-        print("\n>>> КРОК 5: Команда LAND (Посадка)...")
+        # 6. Автоматична посадка
+        print("\n>>> КРОК 5: Виконання місії завершено. Команда LAND (Посадка)...")
         command_queue.put(create_command("set_mode", mode="LAND"))
-        time.sleep(3)
+        time.sleep(4)
 
     except KeyboardInterrupt:
-        print("\n\n🛑 [MAIN] Екстрена зупинка (Ctrl+C)! Вимикаємо мотори...")
+        print("\n\n🛑 [MAIN] Аварійне переривання оператором (Ctrl+C)! Перехід у LAND...")
         command_queue.put(create_command("set_mode", mode="LAND"))
-        command_queue.put(create_command("arm", state=False))
         time.sleep(1)
 
     finally:
-        print("\n🔌 [MAIN] Завершення роботи. Вимкнення процесів...")
+        print("\n🔌 [MAIN] Зупинка фонових процесів зв'язку...")
         comm_process.terminate()
         comm_process.join()
-        print("✅ [MAIN] Програму успішно завершено.")
+        print("✅ [MAIN] Тестування завершено. Система офлайн.")
 
 if __name__ == '__main__':
     main()
