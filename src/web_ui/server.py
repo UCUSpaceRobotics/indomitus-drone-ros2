@@ -1,4 +1,5 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -9,9 +10,11 @@ from src.cv.camera import Camera
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("Camera initialization...")
+    backend = os.getenv("CAMERA_BACKEND", "picamera2")
+    device_index = int(os.getenv("CAMERA_DEVICE_INDEX", "0"))
+    print(f"Camera initialization using {backend} backend...")
     app.state.shutdown_event = asyncio.Event()
-    app.state.camera = Camera()
+    app.state.camera = Camera(backend=backend, device_index=device_index)
     try:
         yield
     finally:
