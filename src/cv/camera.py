@@ -69,7 +69,14 @@ class Camera:
         if backend == "picamera2":
             if Picamera2 is None:
                 raise RuntimeError("picamera2 is unavailable; use backend='opencv'.")
-            self._capture = Picamera2()
+            try:
+                self._capture = Picamera2(camera_num=device_index)
+            except IndexError as exc:
+                raise RuntimeError(
+                    "Could not open Picamera2 camera index "
+                    f"{device_index}. Check that the Pi camera is connected and "
+                    "visible to libcamera."
+                ) from exc
             config = self._capture.create_video_configuration(
                 main={"size": (width, height), "format": "RGB888"}
             )
@@ -87,8 +94,7 @@ class Camera:
     def get_frame(self):
         with self._lock:
             if self._backend == "picamera2":
-                frame_rgb = self._capture.capture_array("main")
-                return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                return self._capture.capture_array("main")
 
             ok, frame = self._capture.read()
             if not ok:
