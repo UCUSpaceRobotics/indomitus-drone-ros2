@@ -18,16 +18,16 @@ class PixhawkClient:
     def __init__(self, connection_string="/dev/ttyAMA0", baudrate=921600):
         """Initializes the serial connection to the Pixhawk."""
         print(f"[COMM] Initializing MAVLink connection on {connection_string} @ {baudrate}...")
-        
-        # We set source_system=255 and source_component=0 to identify this RPi as a GCS 
+
+        # We set source_system=255 and source_component=0 to identify this RPi as a GCS
         # (Ground Control Station). This is crucial for the Pixhawk's failsafe logic.
         self.connection = mavutil.mavlink_connection(
-            connection_string, 
+            connection_string,
             baud=baudrate,
-            source_system=255, 
+            source_system=255,
             source_component=0
         )
-        
+
         # Internal state dictionary to hold the latest telemetry
         self.telemetry = {
             "connected": False,
@@ -41,6 +41,8 @@ class PixhawkClient:
             "roll_rad": 0.0,
             "pitch_rad": 0.0,
             "yaw_rad": 0.0,
+            "last_local_position_time": 0.0,
+            "last_attitude_time": 0.0,
             "last_heartbeat_time": 0.0
         }
 
@@ -51,7 +53,7 @@ class PixhawkClient:
         """
         print("[COMM] Waiting for Pixhawk heartbeat...")
         msg = self.connection.wait_heartbeat(timeout=timeout)
-        
+
         if msg:
             print(f"[COMM] Heartbeat received! Target System: {self.connection.target_system}, Component: {self.connection.target_component}")
             self.telemetry["connected"] = True
@@ -64,25 +66,32 @@ class PixhawkClient:
     def request_data_streams(self, rate_hz=10):
         """Requests the Pixhawk to stream specific data packets at a given frequency."""
         print(f"[COMM] Requesting telemetry streams at {rate_hz} Hz...")
-        
-        # Message IDs to request
-        # 32: LOCAL_POSITION_NED, 30: ATTITUDE, 1: SYS_STATUS (Battery/Errors)
-        messages_to_request = [
+
+        self.request_pose_stream(rate_hz=rate_hz)
+        self._request_message_interval(
+            mavutil.mavlink.MAVLINK_MSG_ID_SYS_STATUS,
+            rate_hz,
+        )
+
+    def request_pose_stream(self, rate_hz=20):
+        """Requests local position and attitude streams for autonomy pose control."""
+        print(f"[COMM] Requesting pose streams at {rate_hz} Hz...")
+        for msg_id in (
             mavutil.mavlink.MAVLINK_MSG_ID_LOCAL_POSITION_NED,
             mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE,
-            mavutil.mavlink.MAVLINK_MSG_ID_SYS_STATUS
-        ]
+        ):
+            self._request_message_interval(msg_id, rate_hz)
 
-        for msg_id in messages_to_request:
-            self.connection.mav.command_long_send(
-                self.connection.target_system,
-                self.connection.target_component,
-                mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
-                0,       # Confirmation
-                msg_id,  # Param 1: Message ID
-                int(1e6 / rate_hz), # Param 2: Interval in microseconds
-                0, 0, 0, 0, 0 # Params 3-7 (unused)
-            )
+    def _request_message_interval(self, msg_id, rate_hz):
+        self.connection.mav.command_long_send(
+            self.connection.target_system,
+            self.connection.target_component,
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+            0,       # Confirmation
+            msg_id,  # Param 1: Message ID
+            int(1e6 / rate_hz), # Param 2: Interval in microseconds
+            0, 0, 0, 0, 0 # Params 3-7 (unused)
+        )
 
     def send_gcs_heartbeat(self):
         """
@@ -105,24 +114,26 @@ class PixhawkClient:
             msg = self.connection.recv_match(blocking=False)
             if msg is None:
                 break # Buffer is empty, exit loop
-            
+
             msg_type = msg.get_type()
 
             if msg_type == "HEARTBEAT":
                 self.telemetry["last_heartbeat_time"] = time.time()
                 self.telemetry["armed"] = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
                 self.telemetry["mode"] = mavutil.mode_string_v10(msg)
-                
+
             elif msg_type == "LOCAL_POSITION_NED":
                 self.telemetry["pos_x_m"] = msg.x
                 self.telemetry["pos_y_m"] = msg.y
                 self.telemetry["pos_z_m"] = msg.z
-                
+                self.telemetry["last_local_position_time"] = time.time()
+
             elif msg_type == "ATTITUDE":
                 self.telemetry["roll_rad"] = msg.roll
                 self.telemetry["pitch_rad"] = msg.pitch
                 self.telemetry["yaw_rad"] = msg.yaw
-                
+                self.telemetry["last_attitude_time"] = time.time()
+
             elif msg_type == "SYS_STATUS":
                 self.telemetry["battery_voltage_v"] = msg.voltage_battery / 1000.0
                 self.telemetry["battery_remaining_pct"] = msg.battery_remaining
@@ -133,6 +144,24 @@ class PixhawkClient:
                 print(f"\n⚠️ [PIXHAWK MSG]: {text}")
 
         return self.telemetry
+
+    def get_pose(self, max_age_s=0.5, now_s=None):
+        """Returns the latest local-NED pose and whether both pose streams are fresh."""
+        now_s = now_s if now_s is not None else time.time()
+        local_age_s = now_s - self.telemetry.get("last_local_position_time", 0.0)
+        attitude_age_s = now_s - self.telemetry.get("last_attitude_time", 0.0)
+        fresh = local_age_s <= max_age_s and attitude_age_s <= max_age_s
+        return {
+            "pos_x_m": self.telemetry["pos_x_m"],
+            "pos_y_m": self.telemetry["pos_y_m"],
+            "pos_z_m": self.telemetry["pos_z_m"],
+            "roll_rad": self.telemetry["roll_rad"],
+            "pitch_rad": self.telemetry["pitch_rad"],
+            "yaw_rad": self.telemetry["yaw_rad"],
+            "local_age_s": local_age_s,
+            "attitude_age_s": attitude_age_s,
+            "fresh": fresh,
+        }
 
     # -------------------------------------------------------------------------
     # COMMAND METHODS (ACTIONS)
@@ -145,7 +174,7 @@ class PixhawkClient:
             return False
 
         mode_id = self.connection.mode_mapping()[mode_name]
-        
+
         self.connection.mav.set_mode_send(
             self.connection.target_system,
             mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
@@ -158,7 +187,7 @@ class PixhawkClient:
         """
         Arms or disarms the motors and waits for confirmation from the Pixhawk.
         Uses a separate fast read loop to catch COMMAND_ACK while maintaining STATUSTEXT logging.
-        
+
         Returns:
         bool: True if the command was accepted, False if rejected or timed out.
         """
@@ -180,7 +209,7 @@ class PixhawkClient:
         start_time = time.time()
         while (time.time() - start_time) < timeout:
             msg = self.connection.recv_match(blocking=False)
-            
+
             if msg is None:
                 time.sleep(0.01)
                 continue
@@ -205,9 +234,9 @@ class PixhawkClient:
         print(f"[COMM] TIMEOUT: No acknowledgment received for {action} command after {timeout}s.")
         return False
 
-    def takeoff(self, altitude_m):
+    def liftoff(self, altitude_m):
         """
-        Commands the drone to take off to a specified relative altitude.
+        Commands the drone to lift off to a specified relative altitude.
         Drone MUST be armed and in GUIDED mode before sending this.
         """
         self.connection.mav.command_long_send(
@@ -215,15 +244,30 @@ class PixhawkClient:
             self.connection.target_component,
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
             0, # Confirmation
-            0, 0, 0, 0, 0, 0, 
+            0, 0, 0, 0, 0, 0,
             altitude_m # Param 7: Altitude in meters
         )
-        print(f"[COMM] Command sent: TAKEOFF to {altitude_m}m")
+        print(f"[COMM] Command sent: LIFTOFF to {altitude_m}m")
+
+    def takeoff(self, altitude_m):
+        """Compatibility wrapper for liftoff()."""
+        self.liftoff(altitude_m)
+
+    def land(self):
+        """Commands the drone to land using MAV_CMD_NAV_LAND."""
+        self.connection.mav.command_long_send(
+            self.connection.target_system,
+            self.connection.target_component,
+            mavutil.mavlink.MAV_CMD_NAV_LAND,
+            0, # Confirmation
+            0, 0, 0, 0, 0, 0, 0 # Params 1-7 (unused)
+        )
+        print("[COMM] Command sent: LAND")
 
     def send_position_target_local_ned(self, dx_m, dy_m, dz_m):
         """
         Moves the drone relative to its CURRENT position and heading.
-        
+
         Parameters:
         dx_m: Move Forward (positive) or Backward (negative) in meters.
         dy_m: Move Right (positive) or Left (negative) in meters.
@@ -243,11 +287,66 @@ class PixhawkClient:
             0, 0              # Yaw, Yaw rate (Ignored)
         )
         print(f"[COMM] Command sent: MOVE Local [dx:{dx_m}, dy:{dy_m}, dz:{dz_m}]")
-    
+
+    def send_local_ned_position_target(self, x_m, y_m, z_m, log=True):
+        """
+        Sends one absolute local-NED position target.
+
+        Parameters:
+        x_m: North position in meters.
+        y_m: East position in meters.
+        z_m: Down position in meters. Negative values are above the local origin.
+        """
+        type_mask = (
+            (1 << 3)  # Ignore velocity X
+            | (1 << 4)  # Ignore velocity Y
+            | (1 << 5)  # Ignore velocity Z
+            | (1 << 6)  # Ignore acceleration X
+            | (1 << 7)  # Ignore acceleration Y
+            | (1 << 8)  # Ignore acceleration Z
+            | (1 << 10) # Ignore yaw
+            | (1 << 11) # Ignore yaw rate
+        )
+
+        self.connection.mav.set_position_target_local_ned_send(
+            int(time.monotonic() * 1000) & 0xFFFFFFFF,
+            self.connection.target_system,
+            self.connection.target_component,
+            mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+            type_mask,
+            x_m, y_m, z_m, # Position
+            0, 0, 0,       # Velocity (Ignored)
+            0, 0, 0,       # Acceleration (Ignored)
+            0, 0           # Yaw, Yaw rate (Ignored)
+        )
+        if log:
+            print(f"[COMM] Command sent: LOCAL_NED position [x:{x_m}, y:{y_m}, z:{z_m}]")
+
+    def hold_local_ned_position(self, x_m, y_m, z_m, rate_hz=10.0, duration_s=None):
+        """
+        Continuously resends the same local-NED position target.
+
+        Use this for GUIDED position hold behavior when commanding from the
+        companion computer. If duration_s is None, this runs until interrupted.
+        """
+        if rate_hz <= 0:
+            raise ValueError("rate_hz must be greater than zero")
+
+        interval_s = 1.0 / rate_hz
+        start_time = time.monotonic()
+        sent_count = 0
+
+        while duration_s is None or (time.monotonic() - start_time) < duration_s:
+            self.send_local_ned_position_target(x_m, y_m, z_m, log=False)
+            sent_count += 1
+            time.sleep(interval_s)
+
+        return sent_count
+
     def send_velocity_target_body_ned(self, vx_m_s, vy_m_s, vz_m_s):
         """
         Commands the drone to move at a specific velocity relative to its own body.
-        
+
         Parameters:
         vx_m_s: Forward (+) / Backward (-) speed in m/s.
         vy_m_s: Right (+) / Left (-) speed in m/s.

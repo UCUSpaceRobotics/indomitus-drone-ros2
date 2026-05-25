@@ -1,6 +1,5 @@
 import time
 import queue
-from src.comm.mavlink_client import PixhawkClient
 
 # --- Configuration Constants ---
 GCS_HEARTBEAT_INTERVAL_SEC = 1.0  # How often to tell Pixhawk we are alive
@@ -21,6 +20,8 @@ def comm_process_loop(telemetry_queue, command_queue, connection_string="/dev/tt
     print("[COMM_NODE] Starting MAVLink communication process...")
     
     try:
+        from src.comm.mavlink_client import PixhawkClient
+
         # 1. Initialize hardware connection
         client = PixhawkClient(connection_string, baudrate)
         
@@ -29,8 +30,9 @@ def comm_process_loop(telemetry_queue, command_queue, connection_string="/dev/tt
             print("[COMM_NODE] CRITICAL: Drone not responding. Exiting process.")
             return
 
-        # 3. Setup data streams (10Hz for position/attitude)
+        # 3. Setup data streams (10Hz general telemetry, 20Hz pose)
         client.request_data_streams(rate_hz=10)
+        client.request_pose_stream(rate_hz=20)
         
     except Exception as e:
         print(f"[COMM_NODE] FATAL hardware initialization error: {e}")
@@ -93,33 +95,7 @@ def comm_process_loop(telemetry_queue, command_queue, connection_string="/dev/tt
                     continue # Skip execution, go to next command
 
                 # --- 2. Command Dispatcher ---
-                action = cmd.get("action")
-                
-                if action == "arm":
-                    client.arm(state=cmd.get("state", True))
-                    
-                elif action == "set_mode":
-                    client.set_mode(mode_name=cmd.get("mode", "GUIDED"))
-                    
-                elif action == "takeoff":
-                    client.takeoff(altitude_m=cmd.get("altitude", 2.0))
-                    
-                elif action == "move_local_pos":
-                    client.send_position_target_local_ned(
-                        dx_m=cmd.get("dx", 0.0),
-                        dy_m=cmd.get("dy", 0.0),
-                        dz_m=cmd.get("dz", 0.0)
-                    )
-                    
-                elif action == "move_local_vel":
-                    client.send_velocity_target_body_ned(
-                        vx_m_s=cmd.get("vx", 0.0),
-                        vy_m_s=cmd.get("vy", 0.0),
-                        vz_m_s=cmd.get("vz", 0.0)
-                    )
-                    
-                else:
-                    print(f"[COMM_NODE] ERROR: Unknown command action: {action}")
+                dispatch_command(client, cmd)
 
             # ---------------------------------------------------------
             # D. CPU RELIEF (Yield execution)
@@ -132,6 +108,46 @@ def comm_process_loop(telemetry_queue, command_queue, connection_string="/dev/tt
         except Exception as e:
             print(f"[COMM_NODE] Unexpected error in main loop: {e}")
             time.sleep(1) # Prevent log spamming on failure
+
+
+def dispatch_command(client, cmd):
+    action = cmd.get("action")
+
+    if action == "arm":
+        client.arm(state=cmd.get("state", True))
+
+    elif action == "set_mode":
+        client.set_mode(mode_name=cmd.get("mode", "GUIDED"))
+
+    elif action == "takeoff":
+        client.takeoff(altitude_m=cmd.get("altitude", 2.0))
+
+    elif action == "land":
+        client.land()
+
+    elif action == "move_local_pos":
+        client.send_position_target_local_ned(
+            dx_m=cmd.get("dx", 0.0),
+            dy_m=cmd.get("dy", 0.0),
+            dz_m=cmd.get("dz", 0.0),
+        )
+
+    elif action == "set_local_position":
+        client.send_local_ned_position_target(
+            x_m=cmd.get("x", 0.0),
+            y_m=cmd.get("y", 0.0),
+            z_m=cmd.get("z", 0.0),
+        )
+
+    elif action == "move_local_vel":
+        client.send_velocity_target_body_ned(
+            vx_m_s=cmd.get("vx", 0.0),
+            vy_m_s=cmd.get("vy", 0.0),
+            vz_m_s=cmd.get("vz", 0.0),
+        )
+
+    else:
+        print(f"[COMM_NODE] ERROR: Unknown command action: {action}")
 
 # --- Helper for the Navigation Module ---
 def create_command(action, **kwargs):
