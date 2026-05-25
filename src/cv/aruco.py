@@ -7,6 +7,8 @@ import numpy as np
 MISSION_MARKER_IDS = {
     "origin": 13,
     "landing_target": 14,
+    "real_origin": 101,
+    "real_landing_target": 102,
 }
 DEFAULT_MARKER_SIZE_M = 0.15
 ARUCO_DICTIONARIES = {
