@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import argparse
+from datetime import datetime
 import sys
 import time
 
@@ -51,6 +52,24 @@ def parse_args():
     parser.add_argument("--duration", type=float, default=0.0)
     parser.add_argument("--interval", type=float, default=0.2)
     parser.add_argument("--no-display", action="store_true")
+    parser.add_argument(
+        "--record",
+        action="store_true",
+        help="Record annotated camera frames to an MP4 file.",
+    )
+    parser.add_argument(
+        "--record-output",
+        help=(
+            "Optional recording path. Defaults to "
+            "aruco_bench_YYYYMMDD_HHMMSS.mp4 in the repo root."
+        ),
+    )
+    parser.add_argument(
+        "--record-fps",
+        type=float,
+        default=30.0,
+        help="FPS metadata for the recorded MP4 file.",
+    )
     return parser.parse_args()
 
 
@@ -74,6 +93,34 @@ def close_windows():
         pass
 
 
+def default_recording_path():
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return REPO_ROOT / f"aruco_bench_{timestamp}.mp4"
+
+
+class RecordingWriter:
+    def __init__(self, path, fps, frame_shape):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+        height, width = frame_shape[:2]
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        self._writer = cv2.VideoWriter(
+            str(self.path),
+            fourcc,
+            float(fps),
+            (width, height),
+        )
+        if not self._writer.isOpened():
+            raise RuntimeError(f"Could not open video writer: {self.path}")
+
+    def write(self, frame):
+        self._writer.write(frame)
+
+    def release(self):
+        self._writer.release()
+
+
 def format_detection(detection):
     pose = "pose=unavailable"
     if detection.has_pose:
@@ -94,6 +141,11 @@ def selected_marker_ids(args):
 
 def main():
     args = parse_args()
+    if args.record and args.image:
+        raise SystemExit("--record is only supported for camera input; omit --image.")
+    if args.record_fps <= 0:
+        raise SystemExit("--record-fps must be greater than 0.")
+
     marker_ids = selected_marker_ids(args)
     calibration = (
         CameraCalibration.from_file(args.calibration)
@@ -151,21 +203,41 @@ def main():
         print("[ARUCO_BENCH] No calibration supplied; reporting 2D centers only.")
 
     display_available = not args.no_display
+    recorder = None
+    recording_path = (
+        Path(args.record_output)
+        if args.record_output
+        else default_recording_path()
+    )
 
     try:
         while True:
             frame = camera.get_frame()
             detections = detector.detect(frame)
+            annotated_frame = None
 
             if detections:
                 print("[ARUCO_BENCH] " + " | ".join(map(format_detection, detections)))
             else:
                 print("[ARUCO_BENCH] no mission markers detected")
 
+            if display_available or args.record:
+                annotated_frame = detector.draw_detections(frame, detections)
+
+            if args.record:
+                if recorder is None:
+                    recorder = RecordingWriter(
+                        recording_path,
+                        args.record_fps,
+                        annotated_frame.shape,
+                    )
+                    print(f"[ARUCO_BENCH] Recording to {recording_path}")
+                recorder.write(annotated_frame)
+
             if display_available:
                 display_available, should_quit = show_frame(
                     "ArUco detection",
-                    detector.draw_detections(frame, detections),
+                    annotated_frame,
                     1,
                 )
                 if should_quit:
@@ -178,6 +250,9 @@ def main():
     except KeyboardInterrupt:
         print("\n[ARUCO_BENCH] stopped by operator")
     finally:
+        if recorder is not None:
+            recorder.release()
+            print(f"[ARUCO_BENCH] Saved recording to {recording_path}")
         camera.release()
         if display_available:
             close_windows()
