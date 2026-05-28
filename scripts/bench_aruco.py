@@ -99,8 +99,11 @@ def default_recording_path():
 
 
 class RecordingWriter:
-    def __init__(self, path, fps, frame_shape):
+    def __init__(self, path, fps, frame_shape, started_at):
         self.path = Path(path)
+        self.fps = float(fps)
+        self.started_at = float(started_at)
+        self.frames_written = 0
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
         height, width = frame_shape[:2]
@@ -108,14 +111,20 @@ class RecordingWriter:
         self._writer = cv2.VideoWriter(
             str(self.path),
             fourcc,
-            float(fps),
+            self.fps,
             (width, height),
         )
         if not self._writer.isOpened():
             raise RuntimeError(f"Could not open video writer: {self.path}")
 
-    def write(self, frame):
-        self._writer.write(frame)
+    def write_until(self, frame, recorded_at):
+        target_frame_count = max(
+            1,
+            int(round((recorded_at - self.started_at) * self.fps)),
+        )
+        while self.frames_written < target_frame_count:
+            self._writer.write(frame)
+            self.frames_written += 1
 
     def release(self):
         self._writer.release()
@@ -213,6 +222,7 @@ def main():
     try:
         while True:
             frame = camera.get_frame()
+            frame_recorded_at = time.time()
             detections = detector.detect(frame)
             annotated_frame = None
 
@@ -230,9 +240,13 @@ def main():
                         recording_path,
                         args.record_fps,
                         annotated_frame.shape,
+                        started_at,
                     )
-                    print(f"[ARUCO_BENCH] Recording to {recording_path}")
-                recorder.write(annotated_frame)
+                    print(
+                        f"[ARUCO_BENCH] Recording to {recording_path} "
+                        f"at {args.record_fps:g} fps"
+                    )
+                recorder.write_until(annotated_frame, frame_recorded_at)
 
             if display_available:
                 display_available, should_quit = show_frame(
