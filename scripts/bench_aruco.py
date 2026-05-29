@@ -4,6 +4,10 @@
 from pathlib import Path
 import argparse
 from datetime import datetime
+import math
+import os
+import shutil
+import signal
 import sys
 import time
 
@@ -65,6 +69,11 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--record-temp-dir",
+        default="/dev/shm",
+        help="Directory for the temporary recording file. Defaults to /dev/shm.",
+    )
+    parser.add_argument(
         "--record-fps",
         type=float,
         default=30.0,
@@ -98,24 +107,32 @@ def default_recording_path():
     return REPO_ROOT / f"aruco_bench_{timestamp}.mp4"
 
 
+def temp_recording_path(final_path, temp_dir):
+    temp_dir = Path(temp_dir)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    return temp_dir / f".{Path(final_path).name}.{os.getpid()}.tmp.mp4"
+
+
 class RecordingWriter:
-    def __init__(self, path, fps, frame_shape, started_at):
+    def __init__(self, path, temp_path, fps, frame_shape, started_at):
         self.path = Path(path)
+        self.temp_path = Path(temp_path)
         self.fps = float(fps)
         self.started_at = float(started_at)
         self.frames_written = 0
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.temp_path.parent.mkdir(parents=True, exist_ok=True)
 
         height, width = frame_shape[:2]
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         self._writer = cv2.VideoWriter(
-            str(self.path),
+            str(self.temp_path),
             fourcc,
             self.fps,
             (width, height),
         )
         if not self._writer.isOpened():
-            raise RuntimeError(f"Could not open video writer: {self.path}")
+            raise RuntimeError(f"Could not open video writer: {self.temp_path}")
 
     def write_until(self, frame, recorded_at):
         target_frame_count = max(
@@ -128,6 +145,7 @@ class RecordingWriter:
 
     def release(self):
         self._writer.release()
+        shutil.move(str(self.temp_path), str(self.path))
 
 
 def format_detection(detection):
@@ -138,6 +156,63 @@ def format_detection(detection):
 
     x_px, y_px = detection.center_px
     return f"id={detection.marker_id} center=({x_px:.1f}, {y_px:.1f}) px {pose}"
+
+
+def draw_distance_labels(frame, detections):
+    for detection in detections:
+        if not detection.has_pose:
+            continue
+
+        distance_m = math.sqrt(sum(component ** 2 for component in detection.tvec))
+        x_px, y_px = detection.corners[2]
+        draw_text_with_background(
+            frame,
+            f"{distance_m:.2f} m",
+            (int(x_px) + 12, int(y_px) - 12),
+        )
+    return frame
+
+
+def draw_text_with_background(frame, text, origin):
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.65
+    thickness = 2
+    padding = 5
+    text_size, baseline = cv2.getTextSize(text, font, scale, thickness)
+    text_width, text_height = text_size
+    x, y = clamp_text_origin(
+        origin,
+        frame.shape[1],
+        frame.shape[0],
+        text_width,
+        text_height + baseline,
+        padding,
+    )
+
+    cv2.rectangle(
+        frame,
+        (x - padding, y - text_height - padding),
+        (x + text_width + padding, y + baseline + padding),
+        (0, 0, 0),
+        cv2.FILLED,
+    )
+    cv2.putText(
+        frame,
+        text,
+        (x, y),
+        font,
+        scale,
+        (255, 255, 255),
+        thickness,
+        cv2.LINE_AA,
+    )
+
+
+def clamp_text_origin(origin, frame_width, frame_height, text_width, text_height, padding):
+    x, y = origin
+    x = max(padding, min(x, frame_width - text_width - padding))
+    y = max(text_height + padding, min(y, frame_height - padding))
+    return x, y
 
 
 def selected_marker_ids(args):
@@ -179,9 +254,13 @@ def main():
             print("[ARUCO_BENCH] no mission markers detected")
 
         if not args.no_display:
+            annotated_frame = draw_distance_labels(
+                detector.draw_detections(frame, detections),
+                detections,
+            )
             display_available, _ = show_frame(
                 "ArUco detection",
-                detector.draw_detections(frame, detections),
+                annotated_frame,
                 0,
             )
             if display_available:
@@ -213,14 +292,28 @@ def main():
 
     display_available = not args.no_display
     recorder = None
+    should_stop = False
     recording_path = (
         Path(args.record_output)
         if args.record_output
         else default_recording_path()
     )
+    recording_temp_path = (
+        temp_recording_path(recording_path, args.record_temp_dir)
+        if args.record
+        else None
+    )
+
+    def request_stop(signum, _frame):
+        nonlocal should_stop
+        should_stop = True
+        print(f"\n[ARUCO_BENCH] received signal {signum}; stopping after current frame")
+
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
 
     try:
-        while True:
+        while not should_stop:
             frame = camera.get_frame()
             frame_recorded_at = time.time()
             detections = detector.detect(frame)
@@ -232,20 +325,25 @@ def main():
                 print("[ARUCO_BENCH] no mission markers detected")
 
             if display_available or args.record:
-                annotated_frame = detector.draw_detections(frame, detections)
+                annotated_frame = draw_distance_labels(
+                    detector.draw_detections(frame, detections),
+                    detections,
+                )
 
             if args.record:
                 if recorder is None:
                     recorder = RecordingWriter(
                         recording_path,
+                        recording_temp_path,
                         args.record_fps,
                         annotated_frame.shape,
                         started_at,
                     )
                     print(
-                        f"[ARUCO_BENCH] Recording to {recording_path} "
+                        f"[ARUCO_BENCH] Recording to RAM at {recording_temp_path} "
                         f"at {args.record_fps:g} fps"
                     )
+                    print(f"[ARUCO_BENCH] Final recording path: {recording_path}")
                 recorder.write_until(annotated_frame, frame_recorded_at)
 
             if display_available:
@@ -261,8 +359,6 @@ def main():
                 break
 
             time.sleep(args.interval)
-    except KeyboardInterrupt:
-        print("\n[ARUCO_BENCH] stopped by operator")
     finally:
         if recorder is not None:
             recorder.release()
