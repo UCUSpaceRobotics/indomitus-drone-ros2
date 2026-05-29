@@ -1,4 +1,4 @@
-umpy
+numpy
 opencv-contrib-python-headless
 pymavlink
 uvicorn
