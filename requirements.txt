@@ -1,0 +1,4 @@
+umpy
+opencv-contrib-python-headless
+pymavlink
+uvicorn
