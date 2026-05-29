@@ -160,6 +160,7 @@ def format_detection(detection):
 
 def draw_distance_labels(frame, detections):
     for detection in detections:
+        draw_marker_frame(frame, detection)
         if not detection.has_pose:
             continue
 
@@ -171,6 +172,14 @@ def draw_distance_labels(frame, detections):
             (int(x_px) + 12, int(y_px) - 12),
         )
     return frame
+
+
+def draw_marker_frame(frame, detection):
+    corners = detection.corners
+    if corners is None or len(corners) != 4:
+        return
+    points = corners.reshape((-1, 1, 2)).astype(int)
+    cv2.polylines(frame, [points], isClosed=True, color=(0, 255, 0), thickness=2)
 
 
 def draw_text_with_background(frame, text, origin):
