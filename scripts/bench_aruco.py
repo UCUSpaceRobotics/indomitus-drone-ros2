@@ -54,12 +54,39 @@ def parse_args():
         help="Detect every marker in the selected dictionary instead of filtering by ID.",
     )
     parser.add_argument("--duration", type=float, default=0.0)
-    parser.add_argument("--interval", type=float, default=0.2)
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=0.0,
+        help="Optional sleep between frames (seconds). Use 0 for max FPS.",
+    )
     parser.add_argument("--no-display", action="store_true")
+    parser.add_argument(
+        "--detect-every",
+        type=int,
+        default=1,
+        help="Run ArUco detection every N frames to improve FPS.",
+    )
+    parser.add_argument(
+        "--log-interval",
+        type=float,
+        default=1.0,
+        help="Seconds between console status logs.",
+    )
+    parser.add_argument(
+        "--no-axes",
+        action="store_true",
+        help="Skip drawing pose axes to reduce CPU load.",
+    )
     parser.add_argument(
         "--record",
         action="store_true",
         help="Record annotated camera frames to an MP4 file.",
+    )
+    parser.add_argument(
+        "--record-raw",
+        action="store_true",
+        help="Record raw frames (no overlays) for smoother video.",
     )
     parser.add_argument(
         "--record-output",
@@ -238,6 +265,12 @@ def main():
         raise SystemExit("--record is only supported for camera input; omit --image.")
     if args.record_fps <= 0:
         raise SystemExit("--record-fps must be greater than 0.")
+    if args.detect_every < 1:
+        raise SystemExit("--detect-every must be at least 1.")
+    if args.log_interval < 0:
+        raise SystemExit("--log-interval must be >= 0.")
+    if args.record and args.record_raw and args.no_display:
+        pass
 
     marker_ids = selected_marker_ids(args)
     calibration = (
@@ -321,23 +354,38 @@ def main():
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
 
+    frame_index = 0
+    detections = []
+    last_log_at = 0.0
+
     try:
         while not should_stop:
             frame = camera.get_frame()
             frame_recorded_at = time.time()
-            detections = detector.detect(frame)
+            frame_index += 1
+            if frame_index % args.detect_every == 0 or not detections:
+                detections = detector.detect(frame)
             annotated_frame = None
 
-            if detections:
-                print("[ARUCO_BENCH] " + " | ".join(map(format_detection, detections)))
-            else:
-                print("[ARUCO_BENCH] no mission markers detected")
+            if args.log_interval == 0 or frame_recorded_at - last_log_at >= args.log_interval:
+                if detections:
+                    print("[ARUCO_BENCH] " + " | ".join(map(format_detection, detections)))
+                else:
+                    print("[ARUCO_BENCH] no mission markers detected")
+                last_log_at = frame_recorded_at
 
             if display_available or args.record:
-                annotated_frame = draw_distance_labels(
-                    detector.draw_detections(frame, detections),
-                    detections,
-                )
+                if args.record_raw:
+                    annotated_frame = frame
+                else:
+                    annotated_frame = draw_distance_labels(
+                        detector.draw_detections(
+                            frame,
+                            detections,
+                            draw_axes=not args.no_axes,
+                        ),
+                        detections,
+                    )
 
             if args.record:
                 if recorder is None:
@@ -367,7 +415,8 @@ def main():
             if args.duration > 0 and time.time() - started_at >= args.duration:
                 break
 
-            time.sleep(args.interval)
+            if args.interval > 0:
+                time.sleep(args.interval)
     finally:
         if recorder is not None:
             recorder.release()
