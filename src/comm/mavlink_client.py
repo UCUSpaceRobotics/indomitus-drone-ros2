@@ -35,6 +35,13 @@ class PixhawkClient:
             "mode": "UNKNOWN",
             "battery_voltage_v": 0.0,
             "battery_remaining_pct": 0,
+            "gps_fix_type": 0,
+            "satellites_visible": 0,
+            "hdop": None,
+            "ekf_flags": 0,
+            "ekf_healthy": False,
+            "rc_rssi": None,
+            "rc_link_live": False,
             "pos_x_m": 0.0,  # Local North
             "pos_y_m": 0.0,  # Local East
             "pos_z_m": 0.0,  # Local Down (Negative is UP)
@@ -43,7 +50,10 @@ class PixhawkClient:
             "yaw_rad": 0.0,
             "last_local_position_time": 0.0,
             "last_attitude_time": 0.0,
-            "last_heartbeat_time": 0.0
+            "last_heartbeat_time": 0.0,
+            "last_gps_time": 0.0,
+            "last_ekf_time": 0.0,
+            "last_rc_channels_time": 0.0,
         }
 
     def wait_for_heartbeat(self, timeout=10.0):
@@ -68,10 +78,13 @@ class PixhawkClient:
         print(f"[COMM] Requesting telemetry streams at {rate_hz} Hz...")
 
         self.request_pose_stream(rate_hz=rate_hz)
-        self._request_message_interval(
-            mavutil.mavlink.MAVLINK_MSG_ID_SYS_STATUS,
-            rate_hz,
-        )
+        for msg_name in (
+            "MAVLINK_MSG_ID_SYS_STATUS",
+            "MAVLINK_MSG_ID_GPS_RAW_INT",
+            "MAVLINK_MSG_ID_EKF_STATUS_REPORT",
+            "MAVLINK_MSG_ID_RC_CHANNELS",
+        ):
+            self._request_message_interval_by_name(msg_name, rate_hz)
 
     def request_pose_stream(self, rate_hz=20):
         """Requests local position and attitude streams for autonomy pose control."""
@@ -92,6 +105,13 @@ class PixhawkClient:
             int(1e6 / rate_hz), # Param 2: Interval in microseconds
             0, 0, 0, 0, 0 # Params 3-7 (unused)
         )
+
+    def _request_message_interval_by_name(self, msg_name, rate_hz):
+        msg_id = getattr(mavutil.mavlink, msg_name, None)
+        if msg_id is None:
+            print(f"[COMM] WARNING: pymavlink lacks {msg_name}; stream not requested")
+            return
+        self._request_message_interval(msg_id, rate_hz)
 
     def send_gcs_heartbeat(self):
         """
@@ -138,12 +158,48 @@ class PixhawkClient:
                 self.telemetry["battery_voltage_v"] = msg.voltage_battery / 1000.0
                 self.telemetry["battery_remaining_pct"] = msg.battery_remaining
 
+            elif msg_type == "GPS_RAW_INT":
+                self.telemetry["gps_fix_type"] = msg.fix_type
+                self.telemetry["satellites_visible"] = msg.satellites_visible
+                self.telemetry["hdop"] = None if msg.eph == 65535 else msg.eph / 100.0
+                self.telemetry["last_gps_time"] = time.time()
+
+            elif msg_type == "EKF_STATUS_REPORT":
+                self.telemetry["ekf_flags"] = msg.flags
+                self.telemetry["ekf_healthy"] = self._ekf_flags_healthy(msg.flags)
+                self.telemetry["last_ekf_time"] = time.time()
+
+            elif msg_type in ("RC_CHANNELS", "RC_CHANNELS_RAW"):
+                self.telemetry["rc_rssi"] = msg.rssi
+                self.telemetry["rc_link_live"] = msg.rssi != 255
+                self.telemetry["last_rc_channels_time"] = time.time()
+
             elif msg_type == "STATUSTEXT":
                 # Intercept text messages from Pixhawk (Pre-Arm errors, EKF warnings, etc.)
                 text = msg.text.decode('utf-8') if isinstance(msg.text, bytes) else msg.text
                 print(f"\n⚠️ [PIXHAWK MSG]: {text}")
 
         return self.telemetry
+
+    def _ekf_flags_healthy(self, flags):
+        """Checks EKF status bits needed for guided local-position tests."""
+        attitude = 1 << 0
+        velocity_horiz = 1 << 1
+        velocity_vert = 1 << 2
+        pos_horiz_rel = 1 << 3
+        pos_horiz_abs = 1 << 4
+        pos_vert_abs = 1 << 5
+        pos_vert_agl = 1 << 6
+        gps_glitch = 1 << 10
+        accel_error = 1 << 11
+
+        has_horizontal_position = bool(flags & (pos_horiz_abs | pos_horiz_rel))
+        has_vertical_position = bool(flags & (pos_vert_abs | pos_vert_agl))
+        required = attitude | velocity_horiz | velocity_vert
+        unhealthy = gps_glitch | accel_error
+        required_ok = (flags & required) == required
+        unhealthy_present = bool(flags & unhealthy)
+        return required_ok and has_horizontal_position and has_vertical_position and not unhealthy_present
 
     def get_pose(self, max_age_s=0.5, now_s=None):
         """Returns the latest local-NED pose and whether both pose streams are fresh."""
