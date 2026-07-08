@@ -23,7 +23,6 @@ DEFAULT_REQUIRED_MODE = "GUIDED"
 @dataclass(frozen=True)
 class SafetyConfig:
     min_battery_voltage_v: float = 11.0
-    max_hdop: float = 2.0
     telemetry_timeout_s: float = 1.0
     max_tilt_rad: float = 0.35
     max_position_deviation_m: float = 2.0
@@ -49,7 +48,6 @@ def add_connection_args(parser):
     parser.add_argument("--required-mode", default=DEFAULT_REQUIRED_MODE)
     parser.add_argument("--precheck-timeout-s", type=float, default=20.0)
     parser.add_argument("--min-battery-voltage", type=float, default=SafetyConfig.min_battery_voltage_v)
-    parser.add_argument("--max-hdop", type=float, default=SafetyConfig.max_hdop)
     parser.add_argument("--telemetry-timeout-s", type=float, default=SafetyConfig.telemetry_timeout_s)
     parser.add_argument("--max-tilt-deg", type=float, default=20.0)
     parser.add_argument("--max-position-deviation-m", type=float, default=SafetyConfig.max_position_deviation_m)
@@ -59,7 +57,6 @@ def add_connection_args(parser):
 def safety_config_from_args(args):
     return SafetyConfig(
         min_battery_voltage_v=args.min_battery_voltage,
-        max_hdop=args.max_hdop,
         telemetry_timeout_s=args.telemetry_timeout_s,
         max_tilt_rad=math.radians(args.max_tilt_deg),
         max_position_deviation_m=args.max_position_deviation_m,
@@ -102,7 +99,6 @@ def annotate_telemetry_ages(telemetry, now_s):
     telemetry["local_age_s"] = _age(now_s, telemetry.get("last_local_position_time"))
     telemetry["attitude_age_s"] = _age(now_s, telemetry.get("last_attitude_time"))
     telemetry["heartbeat_age_s"] = _age(now_s, telemetry.get("last_heartbeat_time"))
-    telemetry["gps_age_s"] = _age(now_s, telemetry.get("last_gps_time"))
     telemetry["ekf_age_s"] = _age(now_s, telemetry.get("last_ekf_time"))
     telemetry["rc_age_s"] = _age(now_s, telemetry.get("last_rc_channels_time"))
     return telemetry
@@ -134,13 +130,6 @@ def precondition_errors(telemetry, safety, required_mode, require_armed):
         errors.append("local position stale or missing")
     if telemetry.get("attitude_age_s", 999.0) > safety.telemetry_timeout_s:
         errors.append("attitude stale or missing")
-    if telemetry.get("gps_age_s", 999.0) > safety.telemetry_timeout_s:
-        errors.append("GPS telemetry stale or missing")
-    if telemetry.get("gps_fix_type", 0) < 3:
-        errors.append(f"GPS fix < 3D: {telemetry.get('gps_fix_type', 0)}")
-    hdop = telemetry.get("hdop")
-    if hdop is None or hdop > safety.max_hdop:
-        errors.append(f"HDOP too high/unknown: {hdop}")
     if telemetry.get("ekf_age_s", 999.0) > safety.telemetry_timeout_s:
         errors.append("EKF telemetry stale or missing")
     if not telemetry.get("ekf_healthy", False):

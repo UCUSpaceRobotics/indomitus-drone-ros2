@@ -24,9 +24,8 @@ Use these scripts for isolated Raspberry Pi -> Pixhawk MAVLink tests. Run one te
 ## Common Preconditions
 - Heartbeat received from Pixhawk.
 - Mode equals required mode, default `GUIDED`.
-- 3D GPS fix: `gps_fix_type >= 3`.
-- HDOP at or below `--max-hdop`, default `2.0`.
-- EKF status healthy.
+- Optical-flow/rangefinder-backed local position is fresh.
+- EKF status healthy for local position.
 - RC link live.
 - Battery voltage at or above `--min-battery-voltage`, default `11.0` V.
 - Local position and attitude telemetry fresh.
@@ -52,9 +51,8 @@ Important CSV columns:
 - `pos_x_m`, `pos_y_m`, `pos_z_m`: actual full NED position.
 - `roll_rad`, `pitch_rad`, `yaw_rad`: full attitude.
 - `mode`, `armed`, `battery_voltage_v`, `battery_remaining_pct`.
-- `gps_fix_type`, `satellites_visible`, `hdop`.
 - `ekf_flags`, `ekf_healthy`, `rc_rssi`, `rc_link_live`.
-- `local_age_s`, `attitude_age_s`, `heartbeat_age_s`, `gps_age_s`, `ekf_age_s`, `rc_age_s`.
+- `local_age_s`, `attitude_age_s`, `heartbeat_age_s`, `ekf_age_s`, `rc_age_s`.
 
 Example CSV shape:
 
@@ -197,7 +195,7 @@ Default pass criteria:
 Fail or abort response:
 - Script sends `LAND` unless `--no-land-at-end` was used.
 - Do not run forward test.
-- Review vertical error, horizontal drift, EKF, HDOP, battery, and telemetry age columns.
+- Review vertical error, horizontal drift, EKF, battery, and telemetry age columns.
 
 ## Test 03: Forward Position
 Purpose: command one +1 m body-forward and +1 m up move, then measure position, vertical error, and lateral drift.
@@ -239,7 +237,7 @@ Default pass criteria:
 
 Fail or abort response:
 - Script sends `LAND` unless `--no-land-at-end` was used.
-- Review yaw, lateral drift, EKF/GPS/HDOP, and position logs before retry.
+- Review yaw, lateral drift, EKF, optical-flow local position, and position logs before retry.
 
 ## Operator Checklist
 Before each test:
