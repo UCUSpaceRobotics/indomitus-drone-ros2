@@ -17,7 +17,7 @@ Use these scripts for isolated Raspberry Pi -> Pixhawk MAVLink tests. Run one te
 
 ## Test Order
 - `test_00_mode_override.py`: propless bench check that RC mode switch overrides GUIDED setpoints.
-- `test_01_arm_only.py`: send one ARM command, verify ack/telemetry, disarm by default.
+- `test_01_arm_only.py`: send one ARM or DISARM command, verify ack/telemetry; ARM path disarms by default.
 - `test_02_vertical_hold.py`: send one +1 m climb command, measure vertical hold error, land by default.
 - `test_03_forward_position.py`: send one +1 m forward/+1 m up command, measure position and drift, land by default.
 
@@ -110,7 +110,7 @@ Fail response:
 - Fix RC mode mapping/failsafe behavior, then rerun this test propless.
 
 ## Test 01: ARM-Only
-Purpose: verify Raspberry Pi can send one ARM command and Pixhawk telemetry confirms armed state.
+Purpose: verify Raspberry Pi can send one ARM or DISARM command and Pixhawk telemetry confirms armed state.
 
 Physical setup:
 - Run only after Test 00 passed and log was reviewed.
@@ -123,10 +123,17 @@ Command:
 .venv/bin/python tests_real/test_01_arm_only.py --confirm-real-flight --confirm-mode-override-tested
 ```
 
+Disarm command:
+
+```bash
+.venv/bin/python tests_real/test_01_arm_only.py --confirm-real-flight --confirm-mode-override-tested --command disarm
+```
+
 Expected real-life behavior:
 - Pi sends one ARM command.
 - Vehicle arms.
 - Script disarms by default after verification.
+- With `--command disarm`, Pi sends one DISARM command and verifies `armed=False`.
 
 Expected terminal:
 - Prechecks pass.
@@ -136,6 +143,7 @@ Expected terminal:
 
 Expected log:
 - `event=arm_command` row.
+- `event=disarm_command` row when `--command disarm` is used.
 - `event=armed_wait` rows until `armed=True`.
 - Cleanup rows showing `armed=False` unless `--leave-armed` was used.
 
@@ -143,6 +151,7 @@ Pass criteria:
 - ARM command accepted by Pixhawk.
 - Telemetry confirms `armed=True` before timeout.
 - Cleanup disarm completes unless intentionally skipped.
+- For `--command disarm`, command accepted and telemetry confirms `armed=False` before timeout.
 
 Fail response:
 - Keep props/vehicle safe, inspect pre-arm STATUSTEXT and CSV.

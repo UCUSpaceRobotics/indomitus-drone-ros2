@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real test: send one ARM command and verify telemetry/ack."""
+"""Real test: send one ARM or DISARM command and verify telemetry/ack."""
 
 from __future__ import annotations
 
@@ -33,6 +33,12 @@ def parse_args():
         action="store_true",
         help="Required: test_00_mode_override.py passed and log was reviewed.",
     )
+    parser.add_argument(
+        "--command",
+        choices=("arm", "disarm"),
+        default="arm",
+        help="One command to send. Default: arm.",
+    )
     parser.add_argument("--leave-armed", action="store_true", help="Do not send DISARM after verification.")
     return parser.parse_args()
 
@@ -54,31 +60,41 @@ def main():
             require_armed=False,
             timeout_s=args.precheck_timeout_s,
         )
-        if telemetry.get("armed"):
+        if args.command == "arm" and telemetry.get("armed"):
             logger.write_summary({"result": "fail", "reason": "vehicle already armed before ARM-only test"})
             raise SystemExit("Refusing ARM-only test: vehicle already armed.")
+        if args.command == "disarm" and not telemetry.get("armed"):
+            logger.write_summary({"result": "fail", "reason": "vehicle already disarmed before DISARM test"})
+            raise SystemExit("Refusing DISARM test: vehicle already disarmed.")
 
-        logger.log_sample(telemetry, event="arm_command", message="sending one ARM command")
-        arm_ack = runtime.client.arm(state=True)
-        telemetry = wait_until_armed(runtime, logger, timeout_s=5.0, expected=True, safety=safety)
-        passed = bool(arm_ack and telemetry.get("armed"))
+        if args.command == "disarm":
+            logger.log_sample(telemetry, event="disarm_command", message="sending one DISARM command")
+            ack = runtime.client.arm(state=False)
+            telemetry = wait_until_armed(runtime, logger, timeout_s=5.0, expected=False)
+            passed = bool(ack and not telemetry.get("armed"))
+        else:
+            logger.log_sample(telemetry, event="arm_command", message="sending one ARM command")
+            ack = runtime.client.arm(state=True)
+            telemetry = wait_until_armed(runtime, logger, timeout_s=5.0, expected=True, safety=safety)
+            passed = bool(ack and telemetry.get("armed"))
 
-        if not args.leave_armed:
+        if args.command == "arm" and not args.leave_armed:
             logger.log_sample(telemetry, event="cleanup_disarm", message="safety disarm after ARM-only test")
             runtime.client.arm(state=False)
             wait_until_armed(runtime, logger, timeout_s=5.0, expected=False)
 
         summary = {
             "result": "pass" if passed else "fail",
-            "arm_ack": arm_ack,
+            "command": args.command,
+            "command_ack": ack,
             "armed_telemetry": telemetry.get("armed"),
-            "left_armed": args.leave_armed,
+            "left_armed": args.command == "arm" and args.leave_armed,
             "log_path": str(logger.csv_path),
         }
         logger.write_summary(summary)
         if not passed:
-            raise SystemExit("FAIL: ARM ack/telemetry did not confirm armed state.")
-        print(f"PASS: ARM command verified. Log: {logger.csv_path}")
+            raise SystemExit(f"FAIL: {args.command.upper()} ack/telemetry did not confirm target armed state.")
+        print(f"PASS: {args.command.upper()} command verified. Log: {logger.csv_path}")
 
 
 if __name__ == "__main__":
