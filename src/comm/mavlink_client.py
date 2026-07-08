@@ -38,6 +38,7 @@ class PixhawkClient:
             "ekf_flags": 0,
             "ekf_healthy": False,
             "rc_rssi": None,
+            "rc_channel_count": 0,
             "rc_link_live": False,
             "pos_x_m": 0.0,  # Local North
             "pos_y_m": 0.0,  # Local East
@@ -160,7 +161,8 @@ class PixhawkClient:
 
             elif msg_type in ("RC_CHANNELS", "RC_CHANNELS_RAW"):
                 self.telemetry["rc_rssi"] = msg.rssi
-                self.telemetry["rc_link_live"] = msg.rssi != 255
+                self.telemetry["rc_channel_count"] = self._rc_channel_count(msg)
+                self.telemetry["rc_link_live"] = msg.rssi != 255 or self.telemetry["rc_channel_count"] > 0
                 self.telemetry["last_rc_channels_time"] = time.time()
 
             elif msg_type == "STATUSTEXT":
@@ -188,6 +190,14 @@ class PixhawkClient:
         required_ok = (flags & required) == required
         unhealthy_present = bool(flags & unhealthy)
         return required_ok and has_horizontal_position and has_vertical_position and not unhealthy_present
+
+    def _rc_channel_count(self, msg):
+        count = 0
+        for index in range(1, 19):
+            value = getattr(msg, f"chan{index}_raw", 0)
+            if 900 <= value <= 2200:
+                count += 1
+        return count
 
     def get_pose(self, max_age_s=0.5, now_s=None):
         """Returns the latest local-NED pose and whether both pose streams are fresh."""

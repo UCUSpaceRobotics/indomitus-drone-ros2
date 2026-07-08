@@ -51,7 +51,7 @@ Important CSV columns:
 - `pos_x_m`, `pos_y_m`, `pos_z_m`: actual full NED position.
 - `roll_rad`, `pitch_rad`, `yaw_rad`: full attitude.
 - `mode`, `armed`, `battery_voltage_v`, `battery_remaining_pct`.
-- `ekf_flags`, `ekf_healthy`, `rc_rssi`, `rc_link_live`.
+- `ekf_flags`, `ekf_healthy`, `rc_rssi`, `rc_channel_count`, `rc_link_live`.
 - `local_age_s`, `attitude_age_s`, `heartbeat_age_s`, `ekf_age_s`, `rc_age_s`.
 
 Example CSV shape:
