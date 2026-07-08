@@ -1,0 +1,26 @@
+[Unit]
+Description=Indomitus Drone – Mission Camera Recording
+# Start after the OS multi-user target is reached and the
+# camera / filesystem stack is ready.
+After=multi-user.target local-fs.target
+
+[Service]
+Type=oneshot
+# Run as root so poweroff works without extra sudo config.
+User=root
+
+ExecStart=/workspace/indomitus-drone-ros2/scripts/record_mission.sh
+
+# Give the script enough time to finish recording + ffmpeg conversion.
+# Set this to at least DURATION (seconds) + 60 s headroom.
+TimeoutStartSec=180
+
+# Capture all output to the journal (viewable with journalctl -u drone-record)
+StandardOutput=journal
+StandardError=journal
+
+# Don't restart; this is a one-shot mission job.
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
