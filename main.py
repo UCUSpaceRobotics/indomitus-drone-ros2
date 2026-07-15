@@ -9,7 +9,7 @@ from src.comm.mavlink_node import comm_process_loop, create_command
 
 def main():
     print("🚀 [MAIN] Ініціалізація автономної системи (Тест на вулиці з GPS)...")
-    
+
     # Створюємо черги для спілкування між процесами
     telemetry_queue = multiprocessing.Queue()
     command_queue = multiprocessing.Queue()
@@ -34,8 +34,8 @@ def main():
         # 3. Армінг (Запуск моторів)
         print("\n>>> КРОК 2: Запит на ARMING (Запуск моторів)...")
         command_queue.put(create_command("arm", state=True))
-        time.sleep(4) 
-        
+        time.sleep(4)
+
         # 3.5. Перехід у GUIDED ВЖЕ ПІСЛЯ армінгу
         print("\n>>> КРОК 2.5: Перехід у режим GUIDED...")
         command_queue.put(create_command("set_mode", mode="GUIDED"))
@@ -79,31 +79,37 @@ def main():
             return
 
         # 5. Моніторинг польоту / висіння у повітрі
-        FLIGHT_DURATION = 12.0  # Час висіння у секундах
+        FLIGHT_DURATION = 7.0  # Час висіння у секундах
         print(f"\n>>> КРОК 4: Моніторинг телеметрії у польоті ({FLIGHT_DURATION} секунд)...")
         start_time = time.time()
-        
+
         while (time.time() - start_time) < FLIGHT_DURATION:
             try:
                 # Дістаємо найсвіжіший словник телеметрії
                 telem = telemetry_queue.get(timeout=0.1)
-                
+
                 # Z-координата в NED йде вниз від точки старту, інвертуємо для реальної висоти
                 alt_m = -telem.get('pos_z_m', 0.0)
                 mode = telem.get('mode', 'UNKNOWN')
                 armed = "ТАК" if telem.get('armed') else "НІ"
                 batt = telem.get('battery_voltage_v', 0.0)
-                
+
                 # Друк телеметрії в один рядок
                 sys.stdout.write(f"\r[ТЕЛЕМЕТРІЯ] Режим: {mode:^8} | Арм: {armed:^3} | Висота: {alt_m:>5.2f}м | Батарея: {batt:>5.1f}V ")
                 sys.stdout.flush()
-                
+
             except queue.Empty:
                 pass
-                
+
             time.sleep(0.2) # Оновлення 5 разів на секунду
-            
+
+        # 5.5 Рух 1м вперед (по осі X у локальній системі координат)
+        print("\n>>> КРОК 5: Рух на 1 метр вперед (по осі X у локальній системі координат)...")
+        command_queue.put(create_command("move_local_pos", dx=1.0, dy=0.0, dz=0.0))
+        time.sleep(3) # Час на виконання руху
+
         print() # Перенесення рядка після завершення циклу
+
 
         # 6. Автоматична посадка
         print("\n>>> КРОК 5: Виконання місії завершено. Команда LAND (Посадка)...")
