@@ -42,9 +42,41 @@ def main():
         time.sleep(2)
 
         # 4. Зліт (Тестовий)
-        TARGET_ALTITUDE = 2.0
+        TARGET_ALTITUDE = 1.0
         print(f"\n>>> КРОК 3: Команда TAKEOFF (Зліт на {TARGET_ALTITUDE} метри)...")
         command_queue.put(create_command("takeoff", altitude=TARGET_ALTITUDE))
+
+        # 4.5. Очікування досягнення цільової висоти (до 20 секунд)
+        ALTITUDE_REACH_TIMEOUT = 15.0
+        reached_target_altitude = False
+        print(f"\n>>> КРОК 3.5: Очікування досягнення {TARGET_ALTITUDE}м (таймаут {ALTITUDE_REACH_TIMEOUT}с)...")
+        reach_start_time = time.time()
+        while (time.time() - reach_start_time) < ALTITUDE_REACH_TIMEOUT:
+            try:
+                telem = telemetry_queue.get(timeout=0.1)
+                alt_m = -telem.get('pos_z_m', 0.0)
+                mode = telem.get('mode', 'UNKNOWN')
+                armed = "ТАК" if telem.get('armed') else "НІ"
+                batt = telem.get('battery_voltage_v', 0.0)
+
+                sys.stdout.write(f"\r[НАБІР ВИСОТИ] Режим: {mode:^8} | Арм: {armed:^3} | Висота: {alt_m:>5.2f}м | Батарея: {batt:>5.1f}V ")
+                sys.stdout.flush()
+
+                if alt_m >= TARGET_ALTITUDE:
+                    reached_target_altitude = True
+                    break
+            except queue.Empty:
+                pass
+            time.sleep(0.2)
+
+        print()
+        if not reached_target_altitude:
+            print(f"\n>>> КРОК 4: Висота {TARGET_ALTITUDE}м не досягнута за {ALTITUDE_REACH_TIMEOUT}с. LAND + DISARM...")
+            command_queue.put(create_command("set_mode", mode="LAND"))
+            time.sleep(4)
+            command_queue.put(create_command("arm", state=False))
+            time.sleep(2)
+            return
 
         # 5. Моніторинг польоту / висіння у повітрі
         FLIGHT_DURATION = 12.0  # Час висіння у секундах
