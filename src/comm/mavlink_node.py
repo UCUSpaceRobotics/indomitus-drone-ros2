@@ -3,14 +3,19 @@ import queue
 
 # --- Configuration Constants ---
 GCS_HEARTBEAT_INTERVAL_SEC = 1.0  # How often to tell Pixhawk we are alive
-TELEMETRY_PUBLISH_RATE_HZ = 10.0  # How often to push telemetry to the rest of the system
-COMMAND_MAX_AGE_SEC = 0.5         # Drop commands older than 500ms
+TELEMETRY_PUBLISH_RATE_HZ = (
+    10.0  # How often to push telemetry to the rest of the system
+)
+COMMAND_MAX_AGE_SEC = 0.5  # Drop commands older than 500ms
 
-def comm_process_loop(telemetry_queue, command_queue, connection_string="/dev/ttyAMA0", baudrate=921600):
+
+def comm_process_loop(
+    telemetry_queue, command_queue, connection_string="/dev/ttyAMA0", baudrate=921600
+):
     """
     Main loop for the MAVLink communication process.
     Runs isolated from the main FastAPI/Computer Vision loops.
-    
+
     Parameters:
     telemetry_queue (multiprocessing.Queue): Queue to push fresh telemetry OUT.
     command_queue (multiprocessing.Queue): Queue to receive commands IN.
@@ -18,13 +23,13 @@ def comm_process_loop(telemetry_queue, command_queue, connection_string="/dev/tt
     baudrate (int): Baud rate for the serial connection.
     """
     print("[COMM_NODE] Starting MAVLink communication process...")
-    
+
     try:
         from src.comm.mavlink_client import PixhawkClient
 
         # 1. Initialize hardware connection
         client = PixhawkClient(connection_string, baudrate)
-        
+
         # 2. Block until drone is online
         if not client.wait_for_heartbeat(timeout=15.0):
             print("[COMM_NODE] CRITICAL: Drone not responding. Exiting process.")
@@ -33,7 +38,7 @@ def comm_process_loop(telemetry_queue, command_queue, connection_string="/dev/tt
         # 3. Setup data streams (10Hz general telemetry, 20Hz pose)
         client.request_data_streams(rate_hz=10)
         client.request_pose_stream(rate_hz=20)
-        
+
     except Exception as e:
         print(f"[COMM_NODE] FATAL hardware initialization error: {e}")
         return
@@ -65,14 +70,14 @@ def comm_process_loop(telemetry_queue, command_queue, connection_string="/dev/tt
 
             # Publish telemetry to the rest of the system at a fixed rate
             if (current_time - last_telemetry_pub_time) >= telemetry_interval_sec:
-                # Best Practice: Empty the queue first so the State Machine 
+                # Best Practice: Empty the queue first so the State Machine
                 # always gets the freshest data, avoiding backlog latency.
                 while not telemetry_queue.empty():
                     try:
                         telemetry_queue.get_nowait()
                     except queue.Empty:
                         break
-                
+
                 # Push a copy of the latest dictionary
                 telemetry_queue.put_nowait(current_telemetry.copy())
                 last_telemetry_pub_time = current_time
@@ -89,10 +94,12 @@ def comm_process_loop(telemetry_queue, command_queue, connection_string="/dev/tt
                 # --- 1. Timestamp Validation (Stale Command Filter) ---
                 cmd_timestamp = cmd.get("timestamp", 0.0)
                 cmd_age = current_time - cmd_timestamp
-                
+
                 if cmd_age > COMMAND_MAX_AGE_SEC:
-                    print(f"[COMM_NODE] WARNING: Dropped stale command '{cmd.get('action')}' (Age: {cmd_age:.3f}s)")
-                    continue # Skip execution, go to next command
+                    print(
+                        f"[COMM_NODE] WARNING: Dropped stale command '{cmd.get('action')}' (Age: {cmd_age:.3f}s)"
+                    )
+                    continue  # Skip execution, go to next command
 
                 # --- 2. Command Dispatcher ---
                 dispatch_command(client, cmd)
@@ -100,14 +107,14 @@ def comm_process_loop(telemetry_queue, command_queue, connection_string="/dev/tt
             # ---------------------------------------------------------
             # D. CPU RELIEF (Yield execution)
             # ---------------------------------------------------------
-            time.sleep(0.005) # 5ms sleep prevents 100% core usage
+            time.sleep(0.005)  # 5ms sleep prevents 100% core usage
 
         except KeyboardInterrupt:
             print("[COMM_NODE] Process interrupted by user.")
             break
         except Exception as e:
             print(f"[COMM_NODE] Unexpected error in main loop: {e}")
-            time.sleep(1) # Prevent log spamming on failure
+            time.sleep(1)  # Prevent log spamming on failure
 
 
 def dispatch_command(client, cmd):
@@ -157,12 +164,13 @@ def dispatch_command(client, cmd):
     else:
         print(f"[COMM_NODE] ERROR: Unknown command action: {action}")
 
+
 # --- Helper for the Navigation Module ---
 def create_command(action, **kwargs):
     """
     Helper function to be used by the State Machine to format commands.
     Automatically injects the current timestamp.
-    
+
     Usage:
         cmd = create_command("move_local_vel", vx=0.5, vy=0.0, vz=0.0)
         command_queue.put(cmd)
