@@ -374,7 +374,17 @@ class PixhawkClient:
         dy_m: Move Right (positive) or Left (negative) in meters.
         dz_m: Move DOWN (positive) or UP (negative) in meters.
         """
-        type_mask = int(0b0000110111111000)
+        type_mask = (
+            (1 << 3)   # Ignore velocity X
+            | (1 << 4) # Ignore velocity Y
+            | (1 << 5) # Ignore velocity Z
+            | (1 << 6) # Ignore acceleration X
+            | (1 << 7) # Ignore acceleration Y
+            | (1 << 8) # Ignore acceleration Z
+            | (1 << 10) # Ignore yaw angle
+            # Bit 11 is NOT set:
+            # yaw_rate is active and equals 0 rad/s
+        )
 
         self.connection.mav.set_position_target_local_ned_send(
             0,  # time_boot_ms (not used)
@@ -385,14 +395,14 @@ class PixhawkClient:
             dx_m,
             dy_m,
             dz_m,  # Position
-            0,
-            0,
-            0,  # Velocity (Ignored)
-            0,
-            0,
-            0,  # Acceleration (Ignored)
-            0,
-            0,  # Yaw, Yaw rate (Ignored)
+            0.0,
+            0.0,
+            0.0,  # Velocity (Ignored)
+            0.0,
+            0.0,
+            0.0,  # Acceleration (Ignored)
+            0.0,  # Yaw ignored
+            0.0,  # Active yaw rate: hold 0 rad/s
         )
         print(f"[COMM] Command sent: MOVE Local [dx:{dx_m}, dy:{dy_m}, dz:{dz_m}]")
 
@@ -413,7 +423,7 @@ class PixhawkClient:
             | (1 << 7)  # Ignore acceleration Y
             | (1 << 8)  # Ignore acceleration Z
             | (1 << 10)  # Ignore yaw
-            | (1 << 11)  # Ignore yaw rate
+            # | (1 << 11)  # Ignore yaw rate
         )
 
         self.connection.mav.set_position_target_local_ned_send(
@@ -425,14 +435,14 @@ class PixhawkClient:
             x_m,
             y_m,
             z_m,  # Position
-            0,
-            0,
-            0,  # Velocity (Ignored)
-            0,
-            0,
-            0,  # Acceleration (Ignored)
-            0,
-            0,  # Yaw, Yaw rate (Ignored)
+            0.0,
+            0.0,
+            0.0,  # Velocity (Ignored)
+            0.0,
+            0.0,
+            0.0,  # Acceleration (Ignored)
+            0.0,  # Yaw ignored
+            0.0,  # Active yaw rate: hold 0 rad/s
         )
         if log:
             print(
@@ -477,17 +487,17 @@ class PixhawkClient:
             self.connection.target_component,
             mavutil.mavlink.MAV_FRAME_BODY_NED,  # Velocity relative to drone's heading
             type_mask,
-            0,
-            0,
-            0,  # Position (Ignored)
+            0.0,
+            0.0,
+            0.0,  # Position (Ignored)
             vx_m_s,
             vy_m_s,
             vz_m_s,  # Velocity in m/s (USED)
-            0,
-            0,
-            0,  # Acceleration (Ignored)
-            0,
-            0,  # Yaw, Yaw rate (Ignored)
+            0.0,
+            0.0,
+            0.0,  # Acceleration (Ignored)
+            0.0,
+            0.0,  # Yaw, Yaw rate (Ignored)
         )
         print(
             f"[COMM] Command sent: VELOCITY [vx:{vx_m_s}, vy:{vy_m_s}, vz:{vz_m_s}] m/s"
