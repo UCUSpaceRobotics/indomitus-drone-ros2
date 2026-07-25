@@ -146,6 +146,14 @@ def dispatch_command(client, cmd):
             vz_m_s=cmd.get("vz", 0.0),
         )
 
+    elif action == "land_on_target":
+        target = cmd.get("target")
+
+        if target is None:
+            print("[COMM_NODE] ERROR: land_on_target command has no target")
+            return
+
+        client.land_on_target(tuple(target))
     else:
         print(f"[COMM_NODE] ERROR: Unknown command action: {action}")
 

@@ -2,6 +2,7 @@
 
 import os
 import time
+import math
 
 # Force MAVLink 2.0 protocol before importing pymavlink tools
 os.environ["MAVLINK20"] = "1"
@@ -17,15 +18,14 @@ class PixhawkClient:
 
     def __init__(self, connection_string="/dev/ttyAMA0", baudrate=921600):
         """Initializes the serial connection to the Pixhawk."""
-        print(f"[COMM] Initializing MAVLink connection on {connection_string} @ {baudrate}...")
+        print(
+            f"[COMM] Initializing MAVLink connection on {connection_string} @ {baudrate}..."
+        )
 
         # We set source_system=255 and source_component=0 to identify this RPi as a GCS
         # (Ground Control Station). This is crucial for the Pixhawk's failsafe logic.
         self.connection = mavutil.mavlink_connection(
-            connection_string,
-            baud=baudrate,
-            source_system=255,
-            source_component=0
+            connection_string, baud=baudrate, source_system=255, source_component=0
         )
 
         # Internal state dictionary to hold the latest telemetry
@@ -62,7 +62,9 @@ class PixhawkClient:
         msg = self.connection.wait_heartbeat(timeout=timeout)
 
         if msg:
-            print(f"[COMM] Heartbeat received! Target System: {self.connection.target_system}, Component: {self.connection.target_component}")
+            print(
+                f"[COMM] Heartbeat received! Target System: {self.connection.target_system}, Component: {self.connection.target_component}"
+            )
             self.telemetry["connected"] = True
             self.telemetry["last_heartbeat_time"] = time.time()
             return True
@@ -96,10 +98,14 @@ class PixhawkClient:
             self.connection.target_system,
             self.connection.target_component,
             mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
-            0,       # Confirmation
+            0,  # Confirmation
             msg_id,  # Param 1: Message ID
-            int(1e6 / rate_hz), # Param 2: Interval in microseconds
-            0, 0, 0, 0, 0 # Params 3-7 (unused)
+            int(1e6 / rate_hz),  # Param 2: Interval in microseconds
+            0,
+            0,
+            0,
+            0,
+            0,  # Params 3-7 (unused)
         )
 
     def _request_message_interval_by_name(self, msg_name, rate_hz):
@@ -115,9 +121,7 @@ class PixhawkClient:
         Must be called at least 1Hz to prevent ArduPilot from triggering GCS Failsafe (RTL/LAND).
         """
         self.connection.mav.heartbeat_send(
-            mavutil.mavlink.MAV_TYPE_GCS,
-            mavutil.mavlink.MAV_AUTOPILOT_INVALID,
-            0, 0, 0
+            mavutil.mavlink.MAV_TYPE_GCS, mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0
         )
 
     def get_telemetry_tick(self):
@@ -129,13 +133,15 @@ class PixhawkClient:
         while True:
             msg = self.connection.recv_match(blocking=False)
             if msg is None:
-                break # Buffer is empty, exit loop
+                break  # Buffer is empty, exit loop
 
             msg_type = msg.get_type()
 
             if msg_type == "HEARTBEAT":
                 self.telemetry["last_heartbeat_time"] = time.time()
-                self.telemetry["armed"] = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+                self.telemetry["armed"] = bool(
+                    msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
+                )
                 self.telemetry["mode"] = mavutil.mode_string_v10(msg)
 
             elif msg_type == "LOCAL_POSITION_NED":
@@ -162,12 +168,18 @@ class PixhawkClient:
             elif msg_type in ("RC_CHANNELS", "RC_CHANNELS_RAW"):
                 self.telemetry["rc_rssi"] = msg.rssi
                 self.telemetry["rc_channel_count"] = self._rc_channel_count(msg)
-                self.telemetry["rc_link_live"] = msg.rssi != 255 or self.telemetry["rc_channel_count"] > 0
+                self.telemetry["rc_link_live"] = (
+                    msg.rssi != 255 or self.telemetry["rc_channel_count"] > 0
+                )
                 self.telemetry["last_rc_channels_time"] = time.time()
 
             elif msg_type == "STATUSTEXT":
                 # Intercept text messages from Pixhawk (Pre-Arm errors, EKF warnings, etc.)
-                text = msg.text.decode('utf-8') if isinstance(msg.text, bytes) else msg.text
+                text = (
+                    msg.text.decode("utf-8")
+                    if isinstance(msg.text, bytes)
+                    else msg.text
+                )
                 print(f"\n⚠️ [PIXHAWK MSG]: {text}")
 
         return self.telemetry
@@ -189,7 +201,12 @@ class PixhawkClient:
         unhealthy = accel_error
         required_ok = (flags & required) == required
         unhealthy_present = bool(flags & unhealthy)
-        return required_ok and has_horizontal_position and has_vertical_position and not unhealthy_present
+        return (
+            required_ok
+            and has_horizontal_position
+            and has_vertical_position
+            and not unhealthy_present
+        )
 
     def _rc_channel_count(self, msg):
         count = 0
@@ -232,7 +249,7 @@ class PixhawkClient:
         self.connection.mav.set_mode_send(
             self.connection.target_system,
             mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-            mode_id
+            mode_id,
         )
         print(f"[COMM] Command sent: Change mode to {mode_name}")
         return True
@@ -254,9 +271,14 @@ class PixhawkClient:
             self.connection.target_system,
             self.connection.target_component,
             mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-            0,       # Confirmation
-            arm_val, # Param 1: 1 to arm, 0 to disarm
-            0, 0, 0, 0, 0, 0 # Params 2-7 (unused)
+            0,  # Confirmation
+            arm_val,  # Param 1: 1 to arm, 0 to disarm
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,  # Params 2-7 (unused)
         )
 
         # 2. Direct monitoring loop for ACK
@@ -272,7 +294,11 @@ class PixhawkClient:
 
             # Ensure we still print status texts if they arrive inside this loop
             if msg_type == "STATUSTEXT":
-                text = msg.text.decode('utf-8') if isinstance(msg.text, bytes) else msg.text
+                text = (
+                    msg.text.decode("utf-8")
+                    if isinstance(msg.text, bytes)
+                    else msg.text
+                )
                 print(f"\n⚠️ [PIXHAWK MSG inside ARM]: {text}")
 
             elif msg_type == "COMMAND_ACK":
@@ -282,10 +308,14 @@ class PixhawkClient:
                         self.telemetry["armed"] = state
                         return True
                     else:
-                        print(f"[COMM] ERROR: {action} command rejected! (MAV_RESULT code: {msg.result})")
+                        print(
+                            f"[COMM] ERROR: {action} command rejected! (MAV_RESULT code: {msg.result})"
+                        )
                         return False
 
-        print(f"[COMM] TIMEOUT: No acknowledgment received for {action} command after {timeout}s.")
+        print(
+            f"[COMM] TIMEOUT: No acknowledgment received for {action} command after {timeout}s."
+        )
         return False
 
     def liftoff(self, altitude_m):
@@ -297,9 +327,14 @@ class PixhawkClient:
             self.connection.target_system,
             self.connection.target_component,
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
-            0, # Confirmation
-            0, 0, 0, 0, 0, 0,
-            altitude_m # Param 7: Altitude in meters
+            0,  # Confirmation
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            altitude_m,  # Param 7: Altitude in meters
         )
         print(f"[COMM] Command sent: LIFTOFF to {altitude_m}m")
 
@@ -309,14 +344,26 @@ class PixhawkClient:
 
     def land(self):
         """Commands the drone to land using MAV_CMD_NAV_LAND."""
+        precision_mode = getattr(
+            mavutil.mavlink,
+            "PRECISION_LAND_MODE_OPPORTUNISTIC",
+            1,
+        )
+
         self.connection.mav.command_long_send(
             self.connection.target_system,
             self.connection.target_component,
             mavutil.mavlink.MAV_CMD_NAV_LAND,
-            0, # Confirmation
-            0, 0, 0, 0, 0, 0, 0 # Params 1-7 (unused)
+            0,  # confirmation
+            0.0,  # param1: abort altitude
+            precision_mode,  # param2: opportunistic precision landing
+            0.0,  # param3: unused
+            float("nan"),  # param4: retain current yaw behavior
+            0.0,  # param5: land at current latitude
+            0.0,  # param6: land at current longitude
+            0.0,  # param7: ground level
         )
-        print("[COMM] Command sent: LAND")
+        print("[COMM] Command sent: OPPORTUNISTIC PRECISION LAND")
 
     def send_position_target_local_ned(self, dx_m, dy_m, dz_m):
         """
@@ -330,15 +377,22 @@ class PixhawkClient:
         type_mask = int(0b0000110111111000)
 
         self.connection.mav.set_position_target_local_ned_send(
-            0, # time_boot_ms (not used)
+            0,  # time_boot_ms (not used)
             self.connection.target_system,
             self.connection.target_component,
-            mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED, # Relative to current drone body
+            mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED,  # Relative to current drone body
             type_mask,
-            dx_m, dy_m, dz_m, # Position
-            0, 0, 0,          # Velocity (Ignored)
-            0, 0, 0,          # Acceleration (Ignored)
-            0, 0              # Yaw, Yaw rate (Ignored)
+            dx_m,
+            dy_m,
+            dz_m,  # Position
+            0,
+            0,
+            0,  # Velocity (Ignored)
+            0,
+            0,
+            0,  # Acceleration (Ignored)
+            0,
+            0,  # Yaw, Yaw rate (Ignored)
         )
         print(f"[COMM] Command sent: MOVE Local [dx:{dx_m}, dy:{dy_m}, dz:{dz_m}]")
 
@@ -358,8 +412,8 @@ class PixhawkClient:
             | (1 << 6)  # Ignore acceleration X
             | (1 << 7)  # Ignore acceleration Y
             | (1 << 8)  # Ignore acceleration Z
-            | (1 << 10) # Ignore yaw
-            | (1 << 11) # Ignore yaw rate
+            | (1 << 10)  # Ignore yaw
+            | (1 << 11)  # Ignore yaw rate
         )
 
         self.connection.mav.set_position_target_local_ned_send(
@@ -368,13 +422,22 @@ class PixhawkClient:
             self.connection.target_component,
             mavutil.mavlink.MAV_FRAME_LOCAL_NED,
             type_mask,
-            x_m, y_m, z_m, # Position
-            0, 0, 0,       # Velocity (Ignored)
-            0, 0, 0,       # Acceleration (Ignored)
-            0, 0           # Yaw, Yaw rate (Ignored)
+            x_m,
+            y_m,
+            z_m,  # Position
+            0,
+            0,
+            0,  # Velocity (Ignored)
+            0,
+            0,
+            0,  # Acceleration (Ignored)
+            0,
+            0,  # Yaw, Yaw rate (Ignored)
         )
         if log:
-            print(f"[COMM] Command sent: LOCAL_NED position [x:{x_m}, y:{y_m}, z:{z_m}]")
+            print(
+                f"[COMM] Command sent: LOCAL_NED position [x:{x_m}, y:{y_m}, z:{z_m}]"
+            )
 
     def hold_local_ned_position(self, x_m, y_m, z_m, rate_hz=10.0, duration_s=None):
         """
@@ -409,14 +472,98 @@ class PixhawkClient:
         type_mask = int(0b000011011000111)
 
         self.connection.mav.set_position_target_local_ned_send(
-            0, # time_boot_ms (not used)
+            0,  # time_boot_ms (not used)
             self.connection.target_system,
             self.connection.target_component,
-            mavutil.mavlink.MAV_FRAME_BODY_NED, # Velocity relative to drone's heading
+            mavutil.mavlink.MAV_FRAME_BODY_NED,  # Velocity relative to drone's heading
             type_mask,
-            0, 0, 0,                # Position (Ignored)
-            vx_m_s, vy_m_s, vz_m_s, # Velocity in m/s (USED)
-            0, 0, 0,                # Acceleration (Ignored)
-            0, 0                    # Yaw, Yaw rate (Ignored)
+            0,
+            0,
+            0,  # Position (Ignored)
+            vx_m_s,
+            vy_m_s,
+            vz_m_s,  # Velocity in m/s (USED)
+            0,
+            0,
+            0,  # Acceleration (Ignored)
+            0,
+            0,  # Yaw, Yaw rate (Ignored)
         )
-        print(f"[COMM] Command sent: VELOCITY [vx:{vx_m_s}, vy:{vy_m_s}, vz:{vz_m_s}] m/s")
+        print(
+            f"[COMM] Command sent: VELOCITY [vx:{vx_m_s}, vy:{vy_m_s}, vz:{vz_m_s}] m/s"
+        )
+
+    def land_on_target(
+        self,
+        target: tuple[float, float, float],
+        initiate_landing: bool = False,
+    ):
+        """
+        Sends the current precision-landing target position to ArduPilot.
+
+        Parameters:
+            target:
+                Current landing-target position in MAV_FRAME_BODY_FRD, in meters:
+
+                target[0] = x: forward from the drone
+                target[1] = y: right from the drone
+                target[2] = z: down from the drone
+
+                Example:
+                    (0.20, -0.10, 2.50)
+
+                means the marker is:
+                    20 cm forward,
+                    10 cm left,
+                    2.5 m below the drone.
+
+            initiate_landing:
+                When True, also sends MAV_CMD_NAV_LAND after publishing the
+                target measurement. Set this to True only once, when precision
+                landing should begin.
+
+        This function must continue to be called with updated target coordinates
+        while the target remains visible.
+        """
+
+        if len(target) != 3:
+            raise ValueError(
+                "target must contain exactly three BODY_FRD coordinates: "
+                "(x_forward_m, y_right_m, z_down_m)"
+            )
+
+        x_m, y_m, z_m = map(float, target)
+
+        if not all(math.isfinite(value) for value in (x_m, y_m, z_m)):
+            raise ValueError("Landing-target coordinates must be finite numbers")
+
+        if z_m <= 0.0:
+            raise ValueError(
+                "Landing target must be below the drone: BODY_FRD z must be positive"
+            )
+
+        distance_m = math.sqrt(x_m**2 + y_m**2 + z_m**2)
+
+        self.connection.mav.landing_target_send(
+            int(time.time() * 1_000_000),  # time_usec
+            0,  # target_num
+            mavutil.mavlink.MAV_FRAME_BODY_FRD,
+            0.0,  # angle_x, unused in position mode
+            0.0,  # angle_y, unused in position mode
+            distance_m,
+            0.0,  # size_x, unused
+            0.0,  # size_y, unused
+            x_m,  # forward
+            y_m,  # right
+            z_m,  # down
+            (1.0, 0.0, 0.0, 0.0),  # target orientation, unused
+            mavutil.mavlink.LANDING_TARGET_TYPE_VISION_FIDUCIAL,
+            1,  # position_valid
+        )
+
+        if initiate_landing:
+            self.land()
+            print(
+                "[COMM] Precision landing initiated on target "
+                f"[x:{x_m:.3f}, y:{y_m:.3f}, z:{z_m:.3f}]"
+            )
