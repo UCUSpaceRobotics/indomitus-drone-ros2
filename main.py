@@ -6,6 +6,8 @@ import queue
 import sys
 
 from src.comm.mavlink_node import comm_process_loop, create_command
+from configs.sil_config import CONNECTION_STRING, BAUDRATE
+
 
 def main():
     print("🚀 [MAIN] Ініціалізація автономної системи (Тест на вулиці з GPS)...")
@@ -17,7 +19,7 @@ def main():
     # 1. Запуск фонового процесу MAVLink
     comm_process = multiprocessing.Process(
         target=comm_process_loop,
-        args=(telemetry_queue, command_queue, "/dev/ttyAMA0", 921600),
+        args=(telemetry_queue, command_queue, CONNECTION_STRING, BAUDRATE or 921600),
         daemon=True
     )
     comm_process.start()

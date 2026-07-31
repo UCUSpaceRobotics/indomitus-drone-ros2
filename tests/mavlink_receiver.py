@@ -29,7 +29,7 @@ def command_name(command_id):
 
 
 def main():
-    connection_string = "udpin:127.0.0.1:14550"
+    connection_string = "udpin:127.0.0.1:14551"
 
     print(f"[RECEIVER] Listening on {connection_string}")
     mav = mavutil.mavlink_connection(
