@@ -1,3 +1,24 @@
+"""Detect configured ArUco markers in OpenCV images.
+
+Basic usage::
+
+    import cv2
+
+    from src.cv.aruco import ArucoDetector
+
+    frame = cv2.imread("marker.jpg")
+    detector = ArucoDetector(marker_ids={13, 14})
+    detections = detector.detect(frame)
+
+    for detection in detections:
+        print(detection.marker_id, detection.center_px)
+
+    annotated_frame = detector.draw_detections(frame, detections)
+
+Pass camera calibration to ``ArucoDetector`` to populate each detection's
+``rvec`` and ``tvec`` pose fields.
+"""
+
 from dataclasses import dataclass
 
 import cv2
@@ -29,6 +50,12 @@ class ArucoDetection:
     @property
     def has_pose(self):
         return self.rvec is not None and self.tvec is not None
+
+    def distance_m(self):
+        """Return straight-line camera-to-marker distance, or None without pose."""
+        if self.tvec is None:
+            return None
+        return float(np.linalg.norm(self.tvec))
 
 
 class ArucoDetector:

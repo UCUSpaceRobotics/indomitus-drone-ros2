@@ -3,10 +3,6 @@
 
 from pathlib import Path
 import argparse
-from datetime import datetime
-import math
-import os
-import shutil
 import signal
 import sys
 import time
@@ -19,6 +15,11 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from src.cv.aruco import ARUCO_DICTIONARIES, ArucoDetector, MISSION_MARKER_IDS
 from src.cv.camera import CameraCalibration
+from src.cv.recording import (
+    RecordingWriter,
+    temporary_recording_path,
+    timestamped_recording_path,
+)
 
 
 def parse_args():
@@ -129,52 +130,6 @@ def close_windows():
         pass
 
 
-def default_recording_path():
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return REPO_ROOT / f"aruco_bench_{timestamp}.mp4"
-
-
-def temp_recording_path(final_path, temp_dir):
-    temp_dir = Path(temp_dir)
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    return temp_dir / f".{Path(final_path).name}.{os.getpid()}.tmp.mp4"
-
-
-class RecordingWriter:
-    def __init__(self, path, temp_path, fps, frame_shape, started_at):
-        self.path = Path(path)
-        self.temp_path = Path(temp_path)
-        self.fps = float(fps)
-        self.started_at = float(started_at)
-        self.frames_written = 0
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.temp_path.parent.mkdir(parents=True, exist_ok=True)
-
-        height, width = frame_shape[:2]
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        self._writer = cv2.VideoWriter(
-            str(self.temp_path),
-            fourcc,
-            self.fps,
-            (width, height),
-        )
-        if not self._writer.isOpened():
-            raise RuntimeError(f"Could not open video writer: {self.temp_path}")
-
-    def write_until(self, frame, recorded_at):
-        target_frame_count = max(
-            1,
-            int(round((recorded_at - self.started_at) * self.fps)),
-        )
-        while self.frames_written < target_frame_count:
-            self._writer.write(frame)
-            self.frames_written += 1
-
-    def release(self):
-        self._writer.release()
-        shutil.move(str(self.temp_path), str(self.path))
-
-
 def format_detection(detection):
     pose = "pose=unavailable"
     if detection.has_pose:
@@ -191,7 +146,7 @@ def draw_distance_labels(frame, detections):
         if not detection.has_pose:
             continue
 
-        distance_m = math.sqrt(sum(component ** 2 for component in detection.tvec))
+        distance_m = detection.distance_m()
         x_px, y_px = detection.corners[2]
         draw_text_with_background(
             frame,
@@ -338,10 +293,10 @@ def main():
     recording_path = (
         Path(args.record_output)
         if args.record_output
-        else default_recording_path()
+        else timestamped_recording_path(REPO_ROOT, prefix="aruco_bench")
     )
     recording_temp_path = (
-        temp_recording_path(recording_path, args.record_temp_dir)
+        temporary_recording_path(recording_path, args.record_temp_dir)
         if args.record
         else None
     )
