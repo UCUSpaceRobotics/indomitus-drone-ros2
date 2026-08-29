@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Capture chessboard calibration images from a live camera feed."""
+"""Stream camera frames in a browser and save calibration snapshots."""
 
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import argparse
+import json
+import socket
 import sys
+import threading
 import time
 
 import cv2
@@ -20,7 +24,7 @@ DEFAULT_OUTPUT_DIR = "media/calibration"
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Show live camera frames and save snapshots for calibration."
+        description="Stream camera frames and save calibration snapshots in a browser."
     )
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--width", type=int, default=640)
@@ -28,6 +32,8 @@ def parse_args():
     parser.add_argument("--backend", choices=("picamera2", "opencv"), default="picamera2")
     parser.add_argument("--device-index", type=int, default=0)
     parser.add_argument("--prefix", default="calibration")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=5000)
     return parser.parse_args()
 
 
@@ -44,25 +50,164 @@ def next_image_path(output_dir, prefix):
     return output_dir / f"{prefix}_{highest + 1:03d}.png"
 
 
-def draw_status(frame, message):
-    cv2.putText(
-        frame,
-        message,
-        (12, 28),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.65,
-        (0, 255, 0),
-        2,
-        cv2.LINE_AA,
-    )
-    return frame
+class CaptureState:
+    def __init__(self, camera, output_dir, prefix):
+        self.camera = camera
+        self.output_dir = output_dir
+        self.prefix = prefix
+        self.lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self.latest_frame = None
+        self.latest_jpeg = None
+        self.saved_count = 0
+        self.last_error = None
+
+    def capture_loop(self):
+        while not self.stop_event.is_set():
+            try:
+                frame = self.camera.get_frame()
+                ok, encoded = cv2.imencode(
+                    ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80]
+                )
+                if not ok:
+                    raise RuntimeError("Could not encode camera frame as JPEG.")
+                with self.lock:
+                    self.latest_frame = frame
+                    self.latest_jpeg = encoded.tobytes()
+                    self.last_error = None
+            except Exception as exc:
+                with self.lock:
+                    self.latest_frame = None
+                    self.latest_jpeg = None
+                    self.last_error = str(exc)
+                time.sleep(0.1)
+
+    def save_snapshot(self):
+        with self.lock:
+            if self.latest_frame is None:
+                raise RuntimeError(self.last_error or "No camera frame is available yet.")
+            frame = self.latest_frame.copy()
+            path = next_image_path(self.output_dir, self.prefix)
+            if not cv2.imwrite(str(path), frame):
+                raise RuntimeError(f"Could not save image: {path}")
+            self.saved_count += 1
+            return path, self.saved_count
 
 
-def close_windows():
+def page_html(width, height):
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Camera calibration capture</title>
+  <style>
+    body {{ background:#121212; color:#eee; font-family:monospace; text-align:center; margin:0; padding:20px; }}
+    h2 {{ color:#00e676; }}
+    .stream {{ display:inline-block; max-width:100%; border:2px solid #333; border-radius:8px; overflow:hidden; background:#000; }}
+    img {{ display:block; width:{width}px; height:{height}px; max-width:100%; object-fit:contain; }}
+    button {{ margin-top:16px; padding:12px 24px; border:0; border-radius:6px; background:#00e676; color:#111; font:700 16px monospace; cursor:pointer; }}
+    button:disabled {{ opacity:.5; cursor:wait; }}
+    #status {{ min-height:1.5em; color:#aaa; }}
+  </style>
+</head>
+<body>
+  <h2>Camera calibration capture</h2>
+  <div class="stream"><img src="/stream.mjpg" alt="Live camera stream"></div><br>
+  <button id="capture" type="button">Save calibration image</button>
+  <p id="status">Waiting for capture</p>
+  <script>
+    const button = document.getElementById('capture');
+    const status = document.getElementById('status');
+    button.addEventListener('click', async () => {{
+      button.disabled = true;
+      try {{
+        const response = await fetch('/capture', {{ method: 'POST' }});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Capture failed');
+        status.textContent = `Saved ${{result.path}} (${{result.saved_count}} this run)`;
+      }} catch (error) {{
+        status.textContent = `Error: ${{error.message}}`;
+      }} finally {{
+        button.disabled = false;
+      }}
+    }});
+  </script>
+</body>
+</html>"""
+
+
+def make_handler(state, width, height):
+    class StreamingHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/":
+                body = page_html(width, height).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            if self.path != "/stream.mjpg":
+                self.send_error(404)
+                return
+
+            self.send_response(200)
+            self.send_header("Age", "0")
+            self.send_header("Cache-Control", "no-cache, private, no-store")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.end_headers()
+            try:
+                while not state.stop_event.is_set():
+                    with state.lock:
+                        frame = state.latest_jpeg
+                    if frame is not None:
+                        self.wfile.write(b"--frame\r\n")
+                        self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                        self.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode())
+                        self.wfile.write(frame)
+                        self.wfile.write(b"\r\n")
+                    time.sleep(0.04)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def do_POST(self):
+            if self.path != "/capture":
+                self.send_error(404)
+                return
+
+            try:
+                path, saved_count = state.save_snapshot()
+                print(f"[CALIB_CAPTURE] saved {path}")
+                payload = {"path": str(path), "saved_count": saved_count}
+                status = 200
+            except RuntimeError as exc:
+                payload = {"error": str(exc)}
+                status = 503
+
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            return
+
+    return StreamingHandler
+
+
+def browser_url(host, port):
+    if host not in ("0.0.0.0", "::"):
+        return f"http://{host}:{port}"
     try:
-        cv2.destroyAllWindows()
-    except cv2.error:
-        pass
+        address = socket.gethostbyname(socket.gethostname())
+    except socket.gaierror:
+        address = "localhost"
+    return f"http://{address}:{port}"
 
 
 def main():
@@ -76,46 +221,30 @@ def main():
         backend=args.backend,
         device_index=args.device_index,
     )
-
-    print(f"[CALIB_CAPTURE] Saving snapshots to: {output_dir}")
-    print("[CALIB_CAPTURE] Press Space or Enter to save; press q or Esc to quit.")
-
-    saved_count = 0
-    last_saved_at = 0.0
-
+    state = CaptureState(camera, output_dir, args.prefix)
+    capture_thread = threading.Thread(target=state.capture_loop, daemon=True)
+    server = None
     try:
-        while True:
-            frame = camera.get_frame()
-            display = frame.copy()
+        server = ThreadingHTTPServer(
+            (args.host, args.port), make_handler(state, args.width, args.height)
+        )
+        server.daemon_threads = False
 
-            if time.time() - last_saved_at < 1.0:
-                status = f"saved {saved_count} images"
-            else:
-                status = "Space/Enter: save  q/Esc: quit"
-            draw_status(display, status)
-
-            try:
-                cv2.imshow("Camera calibration capture", display)
-                key = cv2.waitKey(1) & 0xFF
-            except cv2.error as exc:
-                raise RuntimeError(
-                    "OpenCV GUI is unavailable. Install opencv-contrib-python "
-                    "instead of opencv-contrib-python-headless, or run this "
-                    "script from a graphical desktop session."
-                ) from exc
-
-            if key in (ord("q"), 27):
-                break
-            if key in (ord(" "), 13):
-                path = next_image_path(output_dir, args.prefix)
-                if not cv2.imwrite(str(path), frame):
-                    raise RuntimeError(f"Could not save image: {path}")
-                saved_count += 1
-                last_saved_at = time.time()
-                print(f"[CALIB_CAPTURE] saved {path}")
+        print(f"[CALIB_CAPTURE] Saving snapshots to: {output_dir}")
+        print(f"[CALIB_CAPTURE] Open {browser_url(args.host, args.port)}")
+        print("[CALIB_CAPTURE] Press Ctrl+C to stop.")
+        capture_thread.start()
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
     finally:
+        state.stop_event.set()
+        if server is not None:
+            server.server_close()
+        if capture_thread.is_alive():
+            capture_thread.join(timeout=2.0)
         camera.release()
-        close_windows()
 
 
 if __name__ == "__main__":
