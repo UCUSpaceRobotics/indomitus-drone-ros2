@@ -44,8 +44,8 @@ Command (example):
 source .venv/bin/activate
 python3 scripts/capture_calibration_images.py \
   --output-dir media/calibration \
-  --width 640 \
-  --height 480 \
+  --width 1280 \
+  --height 720 \
   --backend picamera2 \
   --device-index 0 \
   --prefix calibration
@@ -75,8 +75,8 @@ source .venv/bin/activate
 python3 scripts/calibrate_camera.py \
   --image-dir media/calibration \
   --output camera_calibration.npz \
-  --cols 9 \
-  --rows 7 \
+  --cols 7 \
+  --rows 5 \
   --square-size-m 0.035
 ```
 
