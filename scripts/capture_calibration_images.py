@@ -204,9 +204,14 @@ def browser_url(host, port):
     if host not in ("0.0.0.0", "::"):
         return f"http://{host}:{port}"
     try:
-        address = socket.gethostbyname(socket.gethostname())
-    except socket.gaierror:
-        address = "localhost"
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("8.8.8.8", 80))
+            address = probe.getsockname()[0]
+    except OSError:
+        try:
+            address = socket.gethostbyname(socket.gethostname())
+        except socket.gaierror:
+            address = "127.0.0.1"
     return f"http://{address}:{port}"
 
 
